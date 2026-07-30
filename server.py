@@ -582,7 +582,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ApiError(400, "name is required")
                 s = store.create_scene({"name": name[:80],
                                         "icon": (b.get("icon") or "sparkles")[:40],
-                                        "color": (b.get("color") or "#bb9af7")[:20],
+                                        "color": (b.get("color") or "#6c86c8")[:20],
                                         "actions": b.get("actions") or []})
                 return self._json(201, {"scene": s})
             raise ApiError(405, "method not allowed")

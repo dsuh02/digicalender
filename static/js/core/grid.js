@@ -11,6 +11,7 @@
  * screen you look at every day.
  */
 
+import { icon } from './icons.js';
 import { clamp, el } from './util.js';
 
 const MIN_W = 3;
@@ -52,11 +53,11 @@ export class Grid {
         el('button.w-btn', {
           title: 'Options', 'aria-label': 'Widget options',
           onclick: e => { e.stopPropagation(); this.handlers.onEdit?.(widget); },
-        }, ['⚙']),
+        }, [icon('sliders', 15)]),
         el('button.w-btn.w-del', {
           title: 'Remove', 'aria-label': 'Remove widget',
           onclick: e => { e.stopPropagation(); this.handlers.onDelete?.(widget); },
-        }, ['✕']),
+        }, [icon('trash', 15)]),
       ]),
       el('div.w-resize', { title: 'Drag to resize' }),
     );

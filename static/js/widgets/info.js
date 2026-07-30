@@ -48,7 +48,7 @@ export const LabelWidget = {
     { key: 'align', label: 'Alignment', type: 'select', default: 'left',
       options: [{ value: 'left', label: 'Left' }, { value: 'center', label: 'Centre' },
                 { value: 'right', label: 'Right' }] },
-    { key: 'color', label: 'Colour', type: 'color', default: '#e8ebf2' },
+    { key: 'color', label: 'Colour', type: 'color', default: '#e7e9ec' },
     { key: 'divider', label: 'Show divider line', type: 'toggle', default: false },
   ],
   render(host, ctx) {

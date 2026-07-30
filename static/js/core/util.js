@@ -136,9 +136,13 @@ export function layoutColumns(evs) {
   return out;
 }
 
+/* Deliberately desaturated. Full-chroma hues on a panel that's lit all day in
+   a living room read as neon and are tiring to look at; these stay
+   distinguishable at a glance without shouting. Colour is only ever expressed
+   as a 2px rule, a dot or an icon — see widgets.css. */
 export const EVENT_COLORS = [
-  { name: 'blue', value: '#7aa2f7' }, { name: 'green', value: '#9ece6a' },
-  { name: 'purple', value: '#bb9af7' }, { name: 'orange', value: '#ff9e64' },
-  { name: 'pink', value: '#f7768e' }, { name: 'teal', value: '#2ac3de' },
+  { name: 'blue', value: '#6c86c8' }, { name: 'green', value: '#7d9e6b' },
+  { name: 'purple', value: '#907fb4' }, { name: 'amber', value: '#c2914f' },
+  { name: 'rose', value: '#c07281' }, { name: 'teal', value: '#5b95a0' },
 ];
 export const DEFAULT_COLOR = EVENT_COLORS[0].value;

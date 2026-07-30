@@ -21,13 +21,28 @@ const P = {
   remote: 'M8 2h8a2 2 0 012 2v16a2 2 0 01-2 2H8a2 2 0 01-2-2V4a2 2 0 012-2zM12 6v2M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01',
   speaker: 'M11 5L6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 010 7M19 5a9 9 0 010 14',
   play: 'M6 4l14 8-14 8V4z',
+  pause: 'M9 4v16M15 4v16',
+  rewind: 'M11 5L4 12l7 7V5zM20 5l-7 7 7 7V5z',
+  forward: 'M13 5l7 7-7 7V5zM4 5l7 7-7 7V5z',
+  back: 'M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-4',
+  /* Volume: three glyphs that differ only in the number of arcs, so the row
+     reads as one control rather than three unrelated symbols. */
+  'volume-low': 'M11 5L6 9H2v6h4l5 4V5z',
+  'volume-mute': 'M11 5L6 9H2v6h4l5 4V5zM22 9l-6 6M16 9l6 6',
+  'volume-high': 'M11 5L6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 010 7M19 5a9 9 0 010 14',
   sparkles: 'M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z',
   grid: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z',
   text: 'M4 6h16M7 12h10M9 18h6',
   plus: 'M12 5v14M5 12h14',
   lock: 'M7 11V7a5 5 0 0110 0v4M5 11h14v10H5z',
   unlock: 'M7 11V7a5 5 0 019.9-1M5 11h14v10H5z',
-  gear: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-2.9 1.2V21a2 2 0 11-4 0v-.1A1.7 1.7 0 007 19.4a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00-1.2-2.9H1a2 2 0 110-4h.1A1.7 1.7 0 002.6 7a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H7a1.7 1.7 0 001-1.6V1a2 2 0 114 0v.1a1.7 1.7 0 001 1.6 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V7a1.7 1.7 0 001.6 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z',
+  /* Ring + spokes rather than a cogged outline: it stays legible at 15px,
+     which the toothed version does not. */
+  gear: 'M12 15.5a3.5 3.5 0 110-7 3.5 3.5 0 010 7zM12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1',
+  /* Used for per-widget options. A ring-and-spokes gear at 15px is hard to
+     tell from the weather `sun`, and "tune this one thing" is what sliders
+     mean anyway — the cog stays for app-wide settings. */
+  sliders: 'M3 7h18M3 12h18M3 17h18M9 5v4M16 10v4M6 15v4',
   check: 'M20 6L9 17l-5-5',
   trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6',
   wifi: 'M5 12.5a10 10 0 0114 0M8.5 16a5 5 0 017 0M12 20h.01M2 9a15 15 0 0120 0',

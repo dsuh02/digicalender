@@ -68,10 +68,10 @@ function tile(device, opts = {}) {
   const state = liveStates.get(device.id) || device.state || {};
   const online = state.online !== false;
   const on = !!state.on;
-  const accent = opts.color || (device.kind.startsWith('govee') ? '#ff9e64' : '#7aa2f7');
+  const accent = opts.color || (device.kind.startsWith('govee') ? '#c2914f' : '#6c86c8');
 
   const node = el('button.tile' + (on ? '.on' : '') + (online ? '' : '.offline'), {
-    style: on ? { '--tile-accent': accent } : {},
+    style: { '--c': accent },
     onclick: () => {
       if (node._suppressClick) { node._suppressClick = false; return; }
       if (!online) { deviceDetail(device, state); return; }
@@ -100,7 +100,7 @@ export const DeviceGridWidget = {
     { key: 'room', label: 'Only this room', type: 'text',
       help: 'Optional filter, matched exactly' },
     { key: 'columns', label: 'Columns', type: 'slider', min: 1, max: 8, default: 3 },
-    { key: 'accent', label: 'On colour', type: 'color', default: '#7aa2f7' },
+    { key: 'accent', label: 'On colour', type: 'color', default: '#6c86c8' },
   ],
   render(host, ctx) {
     let devices = [];
@@ -203,10 +203,12 @@ export const RokuRemoteWidget = {
         body.append(el('div.remote-note', { text: state.limited_hint }));
       }
 
+      // SVG throughout, never emoji: colour-emoji glyphs render as bright
+      // multicolour bitmaps and wreck an otherwise monochrome panel.
       body.append(el('div.remote-row', {}, [
-        el('button.rbtn', { text: '⏻', title: 'Power', onclick: () => runCommand(device, 'power_toggle') }),
-        el('button.rbtn', { text: '⌂', title: 'Home', onclick: () => press('Home') }),
-        el('button.rbtn', { text: '↩', title: 'Back', onclick: () => press('Back') }),
+        el('button.rbtn', { title: 'Power', onclick: () => runCommand(device, 'power_toggle') }, [icon('power', 19)]),
+        el('button.rbtn', { title: 'Home', onclick: () => press('Home') }, [icon('home', 19)]),
+        el('button.rbtn', { title: 'Back', onclick: () => press('Back') }, [icon('back', 19)]),
       ]));
 
       const pad = el('div.dpad');
@@ -219,16 +221,16 @@ export const RokuRemoteWidget = {
       body.append(pad);
 
       body.append(el('div.remote-row', {}, [
-        el('button.rbtn', { text: '⏮', title: 'Rewind', onclick: () => press('Rev') }),
-        el('button.rbtn', { text: '⏯', title: 'Play/pause', onclick: () => press('Play') }),
-        el('button.rbtn', { text: '⏭', title: 'Forward', onclick: () => press('Fwd') }),
+        el('button.rbtn', { title: 'Rewind', onclick: () => press('Rev') }, [icon('rewind', 19)]),
+        el('button.rbtn', { title: 'Play/pause', onclick: () => press('Play') }, [icon('play', 19)]),
+        el('button.rbtn', { title: 'Forward', onclick: () => press('Fwd') }, [icon('forward', 19)]),
       ]));
 
       if (ctx.settings.showVolume !== false) {
         body.append(el('div.remote-row', {}, [
-          el('button.rbtn', { text: '🔉', title: 'Volume down', onclick: () => runCommand(device, 'volume_down') }),
-          el('button.rbtn', { text: '🔇', title: 'Mute', onclick: () => runCommand(device, 'mute') }),
-          el('button.rbtn', { text: '🔊', title: 'Volume up', onclick: () => runCommand(device, 'volume_up') }),
+          el('button.rbtn', { title: 'Volume down', onclick: () => runCommand(device, 'volume_down') }, [icon('volume-low', 19)]),
+          el('button.rbtn', { title: 'Mute', onclick: () => runCommand(device, 'mute') }, [icon('volume-mute', 19)]),
+          el('button.rbtn', { title: 'Volume up', onclick: () => runCommand(device, 'volume_up') }, [icon('volume-high', 19)]),
         ]));
       }
       if (ctx.settings.showApps !== false) body.append(el('div.remote-apps'));
@@ -285,11 +287,11 @@ export const MediaWidget = {
             }),
           ]),
           el('div.media-controls', {}, [
-            el('button.rbtn', { text: '⏻', title: 'Power', onclick: () => runCommand(d, 'toggle') }),
-            el('button.rbtn', { text: '⏯', title: 'Play/pause', onclick: () => runCommand(d, 'play_pause') }),
-            el('button.rbtn', { text: '🔉', onclick: () => runCommand(d, 'volume_down') }),
-            el('button.rbtn', { text: '🔇', onclick: () => runCommand(d, 'mute') }),
-            el('button.rbtn', { text: '🔊', onclick: () => runCommand(d, 'volume_up') }),
+            el('button.rbtn', { title: 'Power', onclick: () => runCommand(d, 'toggle') }, [icon('power', 18)]),
+            el('button.rbtn', { title: 'Play/pause', onclick: () => runCommand(d, 'play_pause') }, [icon('play', 18)]),
+            el('button.rbtn', { title: 'Volume down', onclick: () => runCommand(d, 'volume_down') }, [icon('volume-low', 18)]),
+            el('button.rbtn', { title: 'Mute', onclick: () => runCommand(d, 'mute') }, [icon('volume-mute', 18)]),
+            el('button.rbtn', { title: 'Volume up', onclick: () => runCommand(d, 'volume_up') }, [icon('volume-high', 18)]),
           ]),
         ]));
       });
@@ -325,7 +327,7 @@ export const ScenesWidget = {
       clear(body);
       body.style.gridTemplateColumns = `repeat(${Number(ctx.settings.columns || 2)}, 1fr)`;
       scenes.forEach(s => {
-        const btn = el('button.scene', { style: { '--scene': s.color || '#bb9af7' },
+        const btn = el('button.scene', { style: { '--c': s.color || '#6c86c8' },
           onclick: async () => {
             if (btn._suppressClick) { btn._suppressClick = false; return; }
             btn.classList.add('running');

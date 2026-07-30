@@ -197,9 +197,10 @@ function liveCalendar(render) {
 }
 
 const chip = (ev, reload) => {
-  const c = ev.color || DEFAULT_COLOR;
+  // JS hands CSS a colour and nothing else; how that colour is expressed
+  // (a rule, a dot, a fill) is a styling decision, not a data one.
   const node = el('div.chip', {
-    style: { borderLeftColor: c, background: `color-mix(in srgb, ${c} 20%, transparent)` },
+    style: { '--c': ev.color || DEFAULT_COLOR },
     onclick: e => { e.stopPropagation(); openEventEditor(ev, {}, reload); },
   });
   if (!ev.all_day) node.append(el('span.t', { text: fmtTime(fromApi(ev.start_utc)) }));
@@ -309,12 +310,11 @@ function drawTimeGrid(body, { cursor, events, settings, reload }, nDays, firstDa
       const top = Math.max(0, (s - dayStart) / 3600000) * hourH;
       const bottom = Math.min(hours * 3600000, e - dayStart) / 3600000 * hourH;
       const h = Math.max(20, bottom - top - 2);
-      const c = ev.color || DEFAULT_COLOR;
       const node = el('div.ev' + (h < 40 ? '.ev-compact' : ''), {
         style: {
           top: top + 'px', height: h + 'px',
           left: `calc(${(ci / nc) * 100}% + 2px)`, width: `calc(${(1 / nc) * 100}% - 4px)`,
-          borderLeftColor: c, background: `color-mix(in srgb, ${c} 26%, var(--bg-elev))`,
+          '--c': ev.color || DEFAULT_COLOR,
         },
         onclick: e2 => { e2.stopPropagation(); openEventEditor(ev, {}, reload); },
       }, [
@@ -449,10 +449,9 @@ export const AgendaWidget = {
               : day.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }),
           }));
         }
-        const c = ev.color || DEFAULT_COLOR;
         const rel = ev.all_day ? '' : relativeTime(fromApi(ev.start_utc), now);
         body.append(el('div.agenda-item', {
-          style: { borderLeftColor: c },
+          style: { '--c': ev.color || DEFAULT_COLOR },
           onclick: () => openEventEditor(ev, {}, load),
         }, [
           el('div.agenda-when', { text: ev.all_day ? 'All day' : fmtTime(fromApi(ev.start_utc)) }),

@@ -1,0 +1,87 @@
+/* The grid and widget frames.
+   Cells are the coordinate system; --cols/--rows come from the page record. */
+
+.grid-host { position: absolute; inset: 0; padding: 10px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), 1fr);
+  grid-template-rows: repeat(var(--rows), 1fr);
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+
+/* Edit mode: show the lattice so cell boundaries are visible while dragging. */
+.grid.editing {
+  background-image:
+    linear-gradient(to right, var(--line-soft) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line-soft) 1px, transparent 1px);
+  background-size: calc(100% / var(--cols)) calc(100% / var(--rows));
+}
+
+.w {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+}
+
+.w-body { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.w-content { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; padding: 10px; }
+
+/* Chrome only exists in edit mode — a wall display shouldn't show gear icons
+   it isn't currently accepting. */
+.w-chrome, .w-resize { display: none; }
+/* Above .w-grip, or the drag band swallows taps on these buttons. */
+.grid.editing .w-chrome {
+  display: flex; align-items: center; gap: 6px;
+  position: absolute; top: 6px; right: 6px; z-index: 7;
+}
+.grid.editing .w-resize {
+  display: block;
+  position: absolute; right: 0; bottom: 0;
+  width: 34px; height: 34px;
+  cursor: nwse-resize;
+  background:
+    linear-gradient(135deg, transparent 50%, var(--accent) 50%);
+  border-bottom-right-radius: var(--radius);
+  touch-action: none;
+  z-index: 6;
+}
+.grid.editing .w-grip {
+  display: block;
+  position: absolute; inset: 0 0 auto 0; height: 42px;
+  background: linear-gradient(var(--bg-press), transparent);
+  cursor: grab; touch-action: none; z-index: 5;
+}
+.w-grip { display: none; }
+.grid.editing .w { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(122,162,247,.25) inset; }
+.grid.editing .w-content { pointer-events: none; opacity: .75; }
+
+.w-btn {
+  min-width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  border-radius: 9px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.w-btn:active { background: var(--bg-press); }
+.w-del { color: var(--danger); border-color: var(--danger); }
+
+.w.dragging { opacity: .35; }
+
+.w-ghost {
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: rgba(122,162,247,.10);
+  pointer-events: none;
+  z-index: 4;
+}
+.w-ghost[data-bad="1"] { border-color: var(--danger); background: rgba(247,118,142,.12); }

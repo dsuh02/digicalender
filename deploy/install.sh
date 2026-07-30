@@ -11,6 +11,7 @@ APP_USER="${APP_USER:-panel}"
 APP_DIR="${APP_DIR:-/home/$APP_USER/digicalender}"
 APP_PORT="${APP_PORT:-8080}"
 TIMEZONE="${TIMEZONE:-America/Los_Angeles}"
+DB_NAME="${DB_NAME:-digicalender}"
 
 [ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
 [ -f "$APP_DIR/server.py" ] || { echo "no server.py under $APP_DIR" >&2; exit 1; }
@@ -19,10 +20,21 @@ USER_UID="$(id -u "$APP_USER")"
 
 echo "==> packages"
 DEBIAN_FRONTEND=noninteractive apt-get update -qq
+# psycopg comes from apt, not pip — the app still has no build step.
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    xserver-xorg xinit openbox unclutter x11-xserver-utils curl
+    xserver-xorg xinit openbox unclutter x11-xserver-utils curl \
+    postgresql python3-psycopg
 # Chromium is snap-only on modern Ubuntu.
 snap list chromium >/dev/null 2>&1 || snap install chromium
+
+echo "==> database"
+# Peer auth over the unix socket: the app runs as $APP_USER and connects as
+# $APP_USER, so no password exists on disk or in the repo.
+systemctl enable --now postgresql
+sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$APP_USER'" | grep -q 1 \
+  || sudo -u postgres createuser --createdb "$APP_USER"
+sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 \
+  || sudo -u postgres createdb -O "$APP_USER" "$DB_NAME"
 
 echo "==> timezone"
 timedatectl set-timezone "$TIMEZONE"
@@ -31,7 +43,10 @@ echo "==> app service"
 cat > /etc/systemd/system/digicalender.service <<UNIT
 [Unit]
 Description=DigiCalender web app
-After=network.target
+# Postgres must be accepting connections first, and Restart=always covers the
+# case where it isn't quite ready when we first try.
+After=network.target postgresql.service
+Wants=postgresql.service
 Before=digicalender-kiosk.service
 
 [Service]
@@ -39,6 +54,7 @@ Type=simple
 User=$APP_USER
 Group=$APP_USER
 WorkingDirectory=$APP_DIR
+Environment=DIGICALENDER_DSN=dbname=$DB_NAME
 ExecStart=/usr/bin/python3 $APP_DIR/server.py --port $APP_PORT
 Restart=always
 RestartSec=3

@@ -1,28 +1,51 @@
 """
-SQLite storage for DigiCalender.
+PostgreSQL storage for DigiCalender (psycopg3).
 
-Schema is deliberately provider-aware from day one so that Google / Microsoft
-sync can be switched on later without a migration: every event carries the
-provider it came from, the remote id/etag, and dirty/deleted flags for
-two-way sync bookkeeping.
+Two halves:
+  - the calendar (events, accounts), provider-aware so Google/Microsoft sync
+    can be added without a migration;
+  - the dashboard (pages, widgets, todos, notifications, devices, scenes),
+    which turns this from a calendar into a wall hub.
+
+Connection: peer auth over the unix socket. The app runs as `panel` and connects
+as `panel`, so there is no password on disk or in the repo. Override with
+DIGICALENDER_DSN if you ever move the database off-box.
+
+Two deliberate choices worth knowing before you edit this file:
+
+**Timestamps are TEXT, not TIMESTAMPTZ.** Everything is ISO-8601 UTC
+("2026-07-30T14:00:00Z"), which sorts lexicographically, so range scans and
+indexes behave exactly as they would on a real timestamp type. The reason is
+all-day events: they are *floating dates* (July 4th is July 4th in any
+timezone), and handing them to a type that applies timezone conversion is
+precisely the bug that made them render across two days. TEXT keeps the wire
+format, the storage format, and the comparison semantics identical.
+
+**Connections are scoped to database work only.** Never hold one across a
+device call — Roku/Govee/Samsung requests are network I/O with real latency,
+and parking a connection behind them is how you exhaust a pool.
 """
 
 from __future__ import annotations
 
 import os
-import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
 
-DB_PATH = os.environ.get(
-    "DIGICALENDER_DB",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "digicalender.db"),
-)
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+
+DSN = os.environ.get("DIGICALENDER_DSN", "dbname=digicalender")
 
 _local = threading.local()
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     uid          TEXT PRIMARY KEY,
     provider     TEXT NOT NULL DEFAULT 'local',
@@ -35,16 +58,13 @@ CREATE TABLE IF NOT EXISTS events (
     location     TEXT NOT NULL DEFAULT '',
     start_utc    TEXT NOT NULL,
     end_utc      TEXT NOT NULL,
-    all_day      INTEGER NOT NULL DEFAULT 0,
+    all_day      BOOLEAN NOT NULL DEFAULT FALSE,
     color        TEXT,
     rrule        TEXT,
     updated_at   TEXT NOT NULL,
-    deleted      INTEGER NOT NULL DEFAULT 0,
-    dirty        INTEGER NOT NULL DEFAULT 0
+    deleted      BOOLEAN NOT NULL DEFAULT FALSE,
+    dirty        BOOLEAN NOT NULL DEFAULT FALSE
 );
-
--- Range queries hit this constantly (every view change is a range query).
-CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_utc);
 CREATE INDEX IF NOT EXISTS idx_events_range ON events(deleted, start_utc, end_utc);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_external
     ON events(provider, account_id, external_id)
@@ -55,8 +75,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     provider     TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
     color        TEXT NOT NULL DEFAULT '#7aa2f7',
-    enabled      INTEGER NOT NULL DEFAULT 1,
-    token_json   TEXT,
+    enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+    token_json   JSONB,
     sync_token   TEXT,
     last_sync    TEXT
 );
@@ -65,26 +85,119 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- A page is one screen of the dashboard; swipe left/right moves between them.
+CREATE TABLE IF NOT EXISTS pages (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    cols       INTEGER NOT NULL DEFAULT 48,
+    rows       INTEGER NOT NULL DEFAULT 32,
+    created_at TEXT NOT NULL
+);
+
+-- x/y/w/h are in grid CELLS, not pixels. The grid is the coordinate system.
+CREATE TABLE IF NOT EXISTS widgets (
+    id         TEXT PRIMARY KEY,
+    page_id    TEXT NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
+    type       TEXT NOT NULL,
+    x          INTEGER NOT NULL,
+    y          INTEGER NOT NULL,
+    w          INTEGER NOT NULL,
+    h          INTEGER NOT NULL,
+    z          INTEGER NOT NULL DEFAULT 0,
+    settings   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_widgets_page ON widgets(page_id);
+
+CREATE TABLE IF NOT EXISTS todos (
+    id         TEXT PRIMARY KEY,
+    list_name  TEXT NOT NULL DEFAULT 'Home',
+    title      TEXT NOT NULL,
+    notes      TEXT NOT NULL DEFAULT '',
+    done       BOOLEAN NOT NULL DEFAULT FALSE,
+    priority   INTEGER NOT NULL DEFAULT 0,
+    due_utc    TEXT,
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_todos_list ON todos(list_name, done, position);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id         TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL DEFAULT 'info',   -- info | warn | error | reminder
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL DEFAULT '',
+    source     TEXT NOT NULL DEFAULT '',
+    dedupe_key TEXT UNIQUE,
+    read       BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(read, created_at DESC);
+
+-- config holds adapter-specific fields (ip, mac, model, token, api key...).
+CREATE TABLE IF NOT EXISTS devices (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    kind       TEXT NOT NULL,   -- adapter: roku | govee_lan | govee_cloud | samsung_tv ...
+    room       TEXT NOT NULL DEFAULT '',
+    config     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    enabled    BOOLEAN NOT NULL DEFAULT TRUE,
+    last_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_seen  TEXT,
+    created_at TEXT NOT NULL
+);
+
+-- actions = [{device_id, command, params}], run in order on one tap.
+CREATE TABLE IF NOT EXISTS scenes (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    icon       TEXT NOT NULL DEFAULT 'sparkles',
+    color      TEXT NOT NULL DEFAULT '#bb9af7',
+    actions    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TEXT NOT NULL
+);
 """
 
 
-def conn() -> sqlite3.Connection:
-    """One connection per thread — ThreadingHTTPServer hands each request its own."""
+def conn() -> psycopg.Connection:
+    """One connection per thread. ThreadingHTTPServer gives each request its own
+    thread, and a psycopg connection is not safe to share across threads."""
     c = getattr(_local, "conn", None)
-    if c is None:
-        c = sqlite3.connect(DB_PATH, timeout=10)
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA foreign_keys=ON")
-        c.execute("PRAGMA busy_timeout=10000")
+    if c is None or c.closed:
+        c = psycopg.connect(DSN, row_factory=dict_row, autocommit=True)
         _local.conn = c
     return c
 
 
-def init_db() -> None:
-    c = conn()
-    c.executescript(SCHEMA)
-    c.commit()
+def q(sql: str, params: tuple | list = (), *, fetch: str | None = None):
+    """Run a statement, retrying once on a dropped connection.
+
+    Postgres restarts (upgrades, a reboot mid-session) otherwise leave the
+    thread-local connection stale and the panel dead until the service is
+    bounced. One transparent reconnect keeps the wall display up.
+    """
+    for attempt in (1, 2):
+        try:
+            with conn().cursor() as cur:
+                cur.execute(sql, params)
+                if fetch == "one":
+                    return cur.fetchone()
+                if fetch == "all":
+                    return cur.fetchall()
+                return cur.rowcount
+        except (psycopg.OperationalError, psycopg.InterfaceError):
+            try:
+                if getattr(_local, "conn", None):
+                    _local.conn.close()
+            except Exception:
+                pass
+            _local.conn = None
+            if attempt == 2:
+                raise
+    return None
 
 
 def now_iso() -> str:
@@ -95,140 +208,388 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
-EVENT_FIELDS = (
-    "uid", "provider", "account_id", "calendar_id", "external_id", "etag",
-    "title", "description", "location", "start_utc", "end_utc", "all_day",
-    "color", "rrule", "updated_at", "deleted", "dirty",
-)
+def init_db() -> None:
+    with conn().cursor() as cur:
+        cur.execute(SCHEMA)
+    row = q("SELECT version FROM schema_version LIMIT 1", fetch="one")
+    if row is None:
+        q("INSERT INTO schema_version (version) VALUES (2)")
+        seed_default_dashboard()
 
 
-def row_to_event(row: sqlite3.Row) -> dict:
-    e = {k: row[k] for k in EVENT_FIELDS}
-    e["all_day"] = bool(e["all_day"])
-    e["deleted"] = bool(e["deleted"])
-    e["dirty"] = bool(e["dirty"])
-    return e
-
+# --------------------------------------------------------------------- events
 
 def list_events(start_utc: str, end_utc: str) -> list[dict]:
-    """Every event that overlaps [start, end). Overlap, not containment —
-    a multi-day event must show up in a window that only touches its middle."""
-    cur = conn().execute(
-        """
-        SELECT * FROM events
-        WHERE deleted = 0
-          AND start_utc < ?
-          AND end_utc   > ?
-        ORDER BY all_day DESC, start_utc ASC
-        """,
-        (end_utc, start_utc),
-    )
-    return [row_to_event(r) for r in cur.fetchall()]
+    """Every event overlapping [start, end) — overlap, not containment, so a
+    multi-day event shows in a window that only touches its middle."""
+    return q("""SELECT * FROM events
+                WHERE deleted = FALSE AND start_utc < %s AND end_utc > %s
+                ORDER BY all_day DESC, start_utc ASC""",
+             (end_utc, start_utc), fetch="all")
 
 
 def get_event(uid: str) -> dict | None:
-    cur = conn().execute("SELECT * FROM events WHERE uid = ?", (uid,))
-    row = cur.fetchone()
-    return row_to_event(row) if row else None
+    return q("SELECT * FROM events WHERE uid = %s", (uid,), fetch="one")
 
 
 def create_event(data: dict) -> dict:
     uid = data.get("uid") or new_uid()
-    ts = now_iso()
-    c = conn()
-    c.execute(
-        """
-        INSERT INTO events (uid, provider, account_id, calendar_id, external_id,
-                            etag, title, description, location, start_utc,
-                            end_utc, all_day, color, rrule, updated_at,
-                            deleted, dirty)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)
-        """,
-        (
-            uid,
-            data.get("provider", "local"),
-            data.get("account_id"),
-            data.get("calendar_id"),
-            data.get("external_id"),
-            data.get("etag"),
-            data["title"],
-            data.get("description", "") or "",
-            data.get("location", "") or "",
-            data["start_utc"],
-            data["end_utc"],
-            1 if data.get("all_day") else 0,
-            data.get("color"),
-            data.get("rrule"),
-            ts,
-            # Locally-created events start dirty so a future sync pushes them up.
-            1 if data.get("provider", "local") == "local" else 0,
-        ),
-    )
-    c.commit()
+    q("""INSERT INTO events (uid, provider, account_id, calendar_id, external_id,
+             etag, title, description, location, start_utc, end_utc, all_day,
+             color, rrule, updated_at, deleted, dirty)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,FALSE,%s)""",
+      (uid, data.get("provider", "local"), data.get("account_id"),
+       data.get("calendar_id"), data.get("external_id"), data.get("etag"),
+       data["title"], data.get("description", "") or "",
+       data.get("location", "") or "", data["start_utc"], data["end_utc"],
+       bool(data.get("all_day")), data.get("color"), data.get("rrule"),
+       now_iso(), data.get("provider", "local") == "local"))
     return get_event(uid)
 
 
-MUTABLE = ("title", "description", "location", "start_utc", "end_utc",
-           "all_day", "color", "rrule", "calendar_id", "account_id", "provider")
+MUTABLE_EVENT = ("title", "description", "location", "start_utc", "end_utc",
+                 "all_day", "color", "rrule", "calendar_id", "account_id", "provider")
 
 
 def update_event(uid: str, data: dict) -> dict | None:
-    existing = get_event(uid)
-    if not existing:
+    if not get_event(uid):
         return None
     sets, vals = [], []
-    for f in MUTABLE:
+    for f in MUTABLE_EVENT:
         if f in data:
-            sets.append(f"{f} = ?")
-            vals.append(1 if f == "all_day" and data[f] else
-                        0 if f == "all_day" else data[f])
+            sets.append(f"{f} = %s")
+            vals.append(bool(data[f]) if f == "all_day" else data[f])
     if not sets:
-        return existing
-    sets.append("updated_at = ?")
-    vals.append(now_iso())
-    sets.append("dirty = 1")
-    vals.append(uid)
-    c = conn()
-    c.execute(f"UPDATE events SET {', '.join(sets)} WHERE uid = ?", vals)
-    c.commit()
+        return get_event(uid)
+    sets += ["updated_at = %s", "dirty = TRUE"]
+    vals += [now_iso(), uid]
+    q(f"UPDATE events SET {', '.join(sets)} WHERE uid = %s", vals)
     return get_event(uid)
 
 
 def delete_event(uid: str) -> bool:
-    """Soft delete — a hard delete would resurrect the event on the next pull
-    from a remote provider, and loses the tombstone we need to push."""
-    c = conn()
-    cur = c.execute(
-        "UPDATE events SET deleted = 1, dirty = 1, updated_at = ? WHERE uid = ?",
-        (now_iso(), uid),
-    )
-    c.commit()
-    return cur.rowcount > 0
+    """Soft delete — a hard delete loses the tombstone we need to push, and the
+    event returns on the next pull from a remote."""
+    return q("UPDATE events SET deleted = TRUE, dirty = TRUE, updated_at = %s WHERE uid = %s",
+             (now_iso(), uid)) > 0
 
 
 def list_accounts() -> list[dict]:
-    cur = conn().execute(
-        "SELECT id, provider, display_name, color, enabled, last_sync FROM accounts"
-    )
-    out = []
-    for r in cur.fetchall():
-        d = dict(r)
-        d["enabled"] = bool(d["enabled"])
-        out.append(d)
-    return out
+    return q("SELECT id, provider, display_name, color, enabled, last_sync FROM accounts",
+             fetch="all")
 
+
+# ---------------------------------------------------------------- dashboard
+
+def seed_default_dashboard() -> None:
+    """First boot gets a usable screen rather than an empty grid."""
+    if q("SELECT 1 FROM pages LIMIT 1", fetch="one"):
+        return
+    home = create_page("Home", position=0)
+    hub = create_page("Hub", position=1)
+    # 48x32 grid: calendar dominant on the left, glanceable column on the right.
+    for w in (
+        dict(type="clock",         x=32, y=0,  w=16, h=6),
+        dict(type="month",         x=0,  y=0,  w=32, h=20),
+        dict(type="agenda",        x=32, y=6,  w=16, h=14),
+        dict(type="todo",          x=0,  y=20, w=16, h=12),
+        dict(type="weather",       x=16, y=20, w=16, h=12),
+        dict(type="notifications", x=32, y=20, w=16, h=12),
+    ):
+        create_widget(home, w.pop("type"), **w)
+    for w in (
+        dict(type="label",       x=0,  y=0,  w=48, h=3, settings={"text": "Home control"}),
+        dict(type="device_grid", x=0,  y=3,  w=28, h=14),
+        dict(type="scenes",      x=28, y=3,  w=20, h=14),
+        dict(type="roku_remote", x=0,  y=17, w=16, h=15),
+        dict(type="media",       x=16, y=17, w=32, h=15),
+    ):
+        create_widget(hub, w.pop("type"), **w)
+
+
+def list_pages() -> list[dict]:
+    return q("SELECT * FROM pages ORDER BY position, created_at", fetch="all")
+
+
+def get_page(pid: str) -> dict | None:
+    return q("SELECT * FROM pages WHERE id = %s", (pid,), fetch="one")
+
+
+def create_page(name: str, position: int = 0, cols: int = 48, rows: int = 32) -> str:
+    pid = new_uid()
+    q("INSERT INTO pages (id, name, position, cols, rows, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
+      (pid, name, position, cols, rows, now_iso()))
+    return pid
+
+
+def update_page(pid: str, data: dict) -> dict | None:
+    if not get_page(pid):
+        return None
+    sets, vals = [], []
+    for f in ("name", "position", "cols", "rows"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    if not sets:
+        return get_page(pid)
+    vals.append(pid)
+    q(f"UPDATE pages SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_page(pid)
+
+
+def delete_page(pid: str) -> bool:
+    return q("DELETE FROM pages WHERE id = %s", (pid,)) > 0
+
+
+def list_widgets(page_id: str | None = None) -> list[dict]:
+    if page_id:
+        return q("SELECT * FROM widgets WHERE page_id = %s ORDER BY z, created_at",
+                 (page_id,), fetch="all")
+    return q("SELECT * FROM widgets ORDER BY page_id, z, created_at", fetch="all")
+
+
+def get_widget(wid: str) -> dict | None:
+    return q("SELECT * FROM widgets WHERE id = %s", (wid,), fetch="one")
+
+
+def create_widget(page_id: str, wtype: str, x: int, y: int, w: int, h: int,
+                  settings: dict | None = None, z: int = 0) -> dict:
+    wid = new_uid()
+    q("""INSERT INTO widgets (id, page_id, type, x, y, w, h, z, settings, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+      (wid, page_id, wtype, x, y, w, h, z, Jsonb(settings or {}), now_iso()))
+    return get_widget(wid)
+
+
+def update_widget(wid: str, data: dict) -> dict | None:
+    if not get_widget(wid):
+        return None
+    sets, vals = [], []
+    for f in ("x", "y", "w", "h", "z", "type", "page_id"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    if "settings" in data:
+        sets.append("settings = %s")
+        vals.append(Jsonb(data["settings"]))
+    if not sets:
+        return get_widget(wid)
+    vals.append(wid)
+    q(f"UPDATE widgets SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_widget(wid)
+
+
+def bulk_update_widgets(items: list[dict]) -> int:
+    """A layout save moves many widgets at once — one transaction, not N, so a
+    half-applied drag can't survive a crash."""
+    n = 0
+    c = conn()
+    with c.transaction(), c.cursor() as cur:
+        for it in items:
+            if not it.get("id"):
+                continue
+            cur.execute("UPDATE widgets SET x=%s, y=%s, w=%s, h=%s WHERE id=%s",
+                        (it["x"], it["y"], it["w"], it["h"], it["id"]))
+            n += cur.rowcount
+    return n
+
+
+def delete_widget(wid: str) -> bool:
+    return q("DELETE FROM widgets WHERE id = %s", (wid,)) > 0
+
+
+# -------------------------------------------------------------------- todos
+
+def list_todos(list_name: str | None = None, include_done: bool = True) -> list[dict]:
+    sql, where, vals = "SELECT * FROM todos", [], []
+    if list_name:
+        where.append("list_name = %s")
+        vals.append(list_name)
+    if not include_done:
+        where.append("done = FALSE")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return q(sql + " ORDER BY done, position, created_at", vals, fetch="all")
+
+
+def get_todo(tid: str) -> dict | None:
+    return q("SELECT * FROM todos WHERE id = %s", (tid,), fetch="one")
+
+
+def create_todo(data: dict) -> dict:
+    tid = new_uid()
+    ts = now_iso()
+    lst = data.get("list_name") or "Home"
+    row = q("SELECT COALESCE(MAX(position), 0) + 1 AS p FROM todos WHERE list_name = %s",
+            (lst,), fetch="one")
+    q("""INSERT INTO todos (id, list_name, title, notes, done, priority,
+             due_utc, position, created_at, updated_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+      (tid, lst, data["title"], data.get("notes", "") or "", bool(data.get("done")),
+       int(data.get("priority", 0)), data.get("due_utc"), row["p"], ts, ts))
+    return get_todo(tid)
+
+
+def update_todo(tid: str, data: dict) -> dict | None:
+    if not get_todo(tid):
+        return None
+    sets, vals = [], []
+    for f in ("title", "notes", "priority", "due_utc", "list_name", "position"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    if "done" in data:
+        sets.append("done = %s")
+        vals.append(bool(data["done"]))
+    if not sets:
+        return get_todo(tid)
+    sets.append("updated_at = %s")
+    vals += [now_iso(), tid]
+    q(f"UPDATE todos SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_todo(tid)
+
+
+def delete_todo(tid: str) -> bool:
+    return q("DELETE FROM todos WHERE id = %s", (tid,)) > 0
+
+
+# ------------------------------------------------------------- notifications
+
+def list_notifications(limit: int = 50, unread_only: bool = False) -> list[dict]:
+    sql = "SELECT * FROM notifications"
+    if unread_only:
+        sql += " WHERE read = FALSE"
+    return q(sql + " ORDER BY created_at DESC LIMIT %s", (limit,), fetch="all")
+
+
+def push_notification(title: str, body: str = "", kind: str = "info",
+                      source: str = "", dedupe_key: str | None = None) -> dict | None:
+    """Returns None when dedupe_key already exists, so callers can fire this on
+    a timer without spamming the panel."""
+    nid = new_uid()
+    n = q("""INSERT INTO notifications (id, kind, title, body, source,
+                 dedupe_key, read, created_at)
+             VALUES (%s,%s,%s,%s,%s,%s,FALSE,%s)
+             ON CONFLICT (dedupe_key) DO NOTHING""",
+          (nid, kind, title, body, source, dedupe_key, now_iso()))
+    if not n:
+        return None
+    return q("SELECT * FROM notifications WHERE id = %s", (nid,), fetch="one")
+
+
+def mark_notification(nid: str, read: bool = True) -> bool:
+    return q("UPDATE notifications SET read = %s WHERE id = %s", (bool(read), nid)) > 0
+
+
+def delete_notification(nid: str) -> bool:
+    return q("DELETE FROM notifications WHERE id = %s", (nid,)) > 0
+
+
+def clear_notifications() -> int:
+    return q("DELETE FROM notifications")
+
+
+# ------------------------------------------------------------------ devices
+
+def list_devices() -> list[dict]:
+    return q("SELECT * FROM devices ORDER BY room, name", fetch="all")
+
+
+def get_device(did: str) -> dict | None:
+    return q("SELECT * FROM devices WHERE id = %s", (did,), fetch="one")
+
+
+def create_device(data: dict) -> dict:
+    did = data.get("id") or new_uid()
+    q("""INSERT INTO devices (id, name, kind, room, config, enabled,
+             last_state, last_seen, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,'{}'::jsonb,NULL,%s)""",
+      (did, data["name"], data["kind"], data.get("room", "") or "",
+       Jsonb(data.get("config", {})), data.get("enabled") is not False, now_iso()))
+    return get_device(did)
+
+
+def update_device(did: str, data: dict) -> dict | None:
+    if not get_device(did):
+        return None
+    sets, vals = [], []
+    for f in ("name", "kind", "room"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    if "config" in data:
+        sets.append("config = %s")
+        vals.append(Jsonb(data["config"]))
+    if "enabled" in data:
+        sets.append("enabled = %s")
+        vals.append(bool(data["enabled"]))
+    if not sets:
+        return get_device(did)
+    vals.append(did)
+    q(f"UPDATE devices SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_device(did)
+
+
+def record_device_state(did: str, state: dict) -> None:
+    q("UPDATE devices SET last_state = %s, last_seen = %s WHERE id = %s",
+      (Jsonb(state), now_iso(), did))
+
+
+def delete_device(did: str) -> bool:
+    return q("DELETE FROM devices WHERE id = %s", (did,)) > 0
+
+
+# ------------------------------------------------------------------- scenes
+
+def list_scenes() -> list[dict]:
+    return q("SELECT * FROM scenes ORDER BY name", fetch="all")
+
+
+def get_scene(sid: str) -> dict | None:
+    return q("SELECT * FROM scenes WHERE id = %s", (sid,), fetch="one")
+
+
+def create_scene(data: dict) -> dict:
+    sid = new_uid()
+    q("INSERT INTO scenes (id, name, icon, color, actions, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
+      (sid, data["name"], data.get("icon", "sparkles"), data.get("color", "#bb9af7"),
+       Jsonb(data.get("actions", [])), now_iso()))
+    return get_scene(sid)
+
+
+def update_scene(sid: str, data: dict) -> dict | None:
+    if not get_scene(sid):
+        return None
+    sets, vals = [], []
+    for f in ("name", "icon", "color"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    if "actions" in data:
+        sets.append("actions = %s")
+        vals.append(Jsonb(data["actions"]))
+    if not sets:
+        return get_scene(sid)
+    vals.append(sid)
+    q(f"UPDATE scenes SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_scene(sid)
+
+
+def delete_scene(sid: str) -> bool:
+    return q("DELETE FROM scenes WHERE id = %s", (sid,)) > 0
+
+
+# ----------------------------------------------------------------- settings
 
 def get_setting(key: str, default: str | None = None) -> str | None:
-    cur = conn().execute("SELECT value FROM settings WHERE key = ?", (key,))
-    row = cur.fetchone()
+    row = q("SELECT value FROM settings WHERE key = %s", (key,), fetch="one")
     return row["value"] if row else default
 
 
 def set_setting(key: str, value: str) -> None:
-    c = conn()
-    c.execute(
-        "INSERT INTO settings (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
-    )
-    c.commit()
+    q("INSERT INTO settings (key, value) VALUES (%s, %s) "
+      "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (key, value))
+
+
+def all_settings() -> dict:
+    return {r["key"]: r["value"] for r in q("SELECT key, value FROM settings", fetch="all")}

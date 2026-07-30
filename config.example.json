@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy to config.json and fill in when connecting Google / Microsoft. Neither is required for the local calendar to work.",
+
+  "google": {
+    "enabled": false,
+    "client_id": "",
+    "client_secret": "",
+    "calendar_ids": ["primary"],
+    "_setup": "Google Cloud console -> enable Calendar API -> OAuth client of type 'TV and Limited Input device' (this box has no keyboard, so use the device-code flow)."
+  },
+
+  "microsoft": {
+    "enabled": false,
+    "client_id": "",
+    "tenant": "consumers",
+    "_setup": "Entra ID -> App registrations -> Authentication -> allow public client flows = Yes. Delegated permissions: Calendars.ReadWrite, offline_access. Use tenant 'consumers' for a personal @outlook.com account, or your tenant id for work."
+  }
+}

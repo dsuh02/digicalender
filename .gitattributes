@@ -1,0 +1,16 @@
+# This repo is authored on Windows but every file runs on Linux. Without this,
+# git's autocrlf turns kiosk.sh and deploy/install.sh into CRLF on checkout and
+# the shebang becomes "#!/bin/sh\r" -> "bad interpreter: No such file or directory".
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+
+*.png binary
+*.jpg binary
+*.db  binary

@@ -1,0 +1,23 @@
+# Runtime database (SQLite + WAL sidecars)
+digicalender.db
+digicalender.db-wal
+digicalender.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Real credentials — only config.example.json is tracked
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

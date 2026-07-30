@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>DigiCalender</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%237aa2f7'/%3E%3Crect x='6' y='9' width='20' height='17' rx='3' fill='%230d0f14'/%3E%3Crect x='6' y='9' width='20' height='5' rx='2.5' fill='%23ff9e64'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="clock">
+    <div class="clock-time" id="clockTime">--:--</div>
+    <div class="clock-date" id="clockDate">&nbsp;</div>
+  </div>
+
+  <div class="nav">
+    <button class="btn btn-icon" id="prevBtn" aria-label="Previous">&#10094;</button>
+    <button class="btn btn-today" id="todayBtn">Today</button>
+    <button class="btn btn-icon" id="nextBtn" aria-label="Next">&#10095;</button>
+  </div>
+
+  <div class="period" id="periodLabel">&nbsp;</div>
+
+  <div class="views" role="tablist">
+    <button class="btn seg" data-view="month" role="tab">Month</button>
+    <button class="btn seg" data-view="week"  role="tab">Week</button>
+    <button class="btn seg" data-view="day"   role="tab">Day</button>
+  </div>
+</header>
+
+<main id="stage" class="stage">
+  <!-- MONTH -->
+  <section class="view" id="viewMonth" hidden>
+    <div class="dow-row" id="monthDow"></div>
+    <div class="month-grid" id="monthGrid"></div>
+  </section>
+
+  <!-- WEEK -->
+  <section class="view timeview" id="viewWeek" hidden>
+    <div class="tv-head">
+      <div class="tv-gutter"></div>
+      <div class="tv-days" id="weekHead"></div>
+    </div>
+    <div class="tv-allday">
+      <div class="tv-gutter tv-allday-label">all-day</div>
+      <div class="tv-days" id="weekAllDay"></div>
+    </div>
+    <div class="tv-scroll" id="weekScroll">
+      <div class="tv-body">
+        <div class="tv-gutter" id="weekGutter"></div>
+        <div class="tv-days tv-canvas" id="weekCanvas"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DAY -->
+  <section class="view timeview" id="viewDay" hidden>
+    <div class="tv-head">
+      <div class="tv-gutter"></div>
+      <div class="tv-days" id="dayHead"></div>
+    </div>
+    <div class="tv-allday">
+      <div class="tv-gutter tv-allday-label">all-day</div>
+      <div class="tv-days" id="dayAllDay"></div>
+    </div>
+    <div class="tv-scroll" id="dayScroll">
+      <div class="tv-body">
+        <div class="tv-gutter" id="dayGutter"></div>
+        <div class="tv-days tv-canvas" id="dayCanvas"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<button class="fab" id="addBtn" aria-label="New event">+</button>
+
+<div class="toast" id="toast" hidden></div>
+
+<!-- Event editor -->
+<div class="sheet-backdrop" id="sheetBackdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-grip"></div>
+    <h2 class="sheet-title" id="sheetTitle">New event</h2>
+
+    <form id="eventForm" autocomplete="off">
+      <label class="field">
+        <span class="field-label">Title</span>
+        <input class="input" id="fTitle" type="text" maxlength="500" required
+               placeholder="What's happening?">
+      </label>
+
+      <label class="row-toggle">
+        <span class="field-label">All day</span>
+        <input type="checkbox" id="fAllDay" class="switch-input">
+        <span class="switch" aria-hidden="true"></span>
+      </label>
+
+      <div class="grid2">
+        <label class="field">
+          <span class="field-label">Starts</span>
+          <input class="input" id="fStartDate" type="date" required>
+        </label>
+        <label class="field" data-timeonly>
+          <span class="field-label">&nbsp;</span>
+          <input class="input" id="fStartTime" type="time" step="300">
+        </label>
+        <label class="field">
+          <span class="field-label">Ends</span>
+          <input class="input" id="fEndDate" type="date" required>
+        </label>
+        <label class="field" data-timeonly>
+          <span class="field-label">&nbsp;</span>
+          <input class="input" id="fEndTime" type="time" step="300">
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Location</span>
+        <input class="input" id="fLocation" type="text" maxlength="500"
+               placeholder="Optional">
+      </label>
+
+      <label class="field">
+        <span class="field-label">Notes</span>
+        <textarea class="input" id="fNotes" rows="2" maxlength="4000"
+                  placeholder="Optional"></textarea>
+      </label>
+
+      <div class="field">
+        <span class="field-label">Colour</span>
+        <div class="swatches" id="fColors"></div>
+      </div>
+
+      <p class="form-error" id="formError" hidden></p>
+
+      <div class="sheet-actions">
+        <button type="button" class="btn btn-danger" id="deleteBtn" hidden>Delete</button>
+        <div class="spacer"></div>
+        <button type="button" class="btn" id="cancelBtn">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="saveBtn">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

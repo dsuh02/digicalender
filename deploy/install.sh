@@ -142,7 +142,10 @@ for s in $(loginctl list-sessions --no-legend | awk '$NF=="tty1"{print $1}'); do
     loginctl terminate-session "$s" 2>/dev/null || true
 done
 systemctl enable --now getty@tty2.service
-systemctl enable --now digicalender.service
+# enable + RESTART, not enable --now: --now is a no-op on an already-running
+# unit, so a re-run after `git pull` would silently keep the old process.
+systemctl enable digicalender.service
+systemctl restart digicalender.service
 systemctl restart digicalender-kiosk.service
 
 sleep 10

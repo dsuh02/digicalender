@@ -114,6 +114,18 @@ input, textarea, select { font: inherit; }
 /* While a drag is in progress the handler drives transform directly. */
 .topbar.dragging { transition: none; }
 
+/* Invisible strip that owns the first touch of a pull-down. touch-action:none
+   is the load-bearing property: it stops the browser claiming the gesture as
+   a scroll and pointercancelling us halfway. Hidden while the bar is open so
+   the bar receives its own taps. */
+.edge-catch {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 26px;
+  z-index: 35;
+  touch-action: none;
+}
+body.bar-open .edge-catch { display: none; }
+
 /* The only hint that the bar exists. Fades out whenever the bar is open. */
 .reveal-hint {
   position: absolute; top: 7px; left: 50%;

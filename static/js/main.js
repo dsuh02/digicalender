@@ -226,6 +226,13 @@ function initPager() {
     return s / pts.size;
   };
 
+  // Same native-gesture problem as the bar pull: once two fingers move, the
+  // browser tries to claim a pan/zoom and pointercancels our drag. While a
+  // page drag is live, the touch sequence is ours.
+  dom.stage.addEventListener('touchmove', e => {
+    if (drag) e.preventDefault();
+  }, { passive: false, capture: true });
+
   dom.stage.addEventListener('pointerdown', e => {
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     // Two fingers anywhere on the stage picks the track up — like a tablet.
@@ -314,6 +321,54 @@ function initTopBar() {
   // Any interaction with the bar itself buys another 7 seconds.
   bar.addEventListener('pointerdown', arm);
 
+  const beginPull = (e) => {
+    if (pull || bar.classList.contains('shown')) return;
+    pull = { id: e.pointerId, y0: e.clientY, dy: 0, t0: Date.now() };
+    bar.classList.add('dragging');
+  };
+  const movePull = (e) => {
+    if (!pull || e.pointerId !== pull.id) return;
+    // The bar rides the finger down, exactly like a notification shade.
+    pull.dy = Math.max(0, e.clientY - pull.y0);
+    bar.style.transform = `translateY(${Math.min(0, -barH() + pull.dy)}px)`;
+  };
+  const endPull = (e) => {
+    if (!pull || e.pointerId !== pull.id) return;
+    // On pointercancel e.clientY can be stale — trust the last move we saw.
+    const dy = Math.max(pull.dy || 0, e.type === 'pointerup' ? e.clientY - pull.y0 : 0);
+    const p = pull;
+    pull = null;
+    bar.classList.remove('dragging');
+    bar.style.transform = '';
+    // A third of the bar is intent enough; 45% felt like it needed convincing.
+    if (dy > barH() * 0.33) showBar();
+    else {
+      bar.classList.remove('shown');
+      document.body.classList.remove('bar-open');
+      // A touch that landed on the strip but never moved was a TAP meant for
+      // whatever sits underneath — pass it on instead of eating it.
+      if (e.currentTarget === strip && dy < 8 && Date.now() - p.t0 < 400) {
+        strip.style.pointerEvents = 'none';
+        document.elementFromPoint(e.clientX, e.clientY)?.click();
+        strip.style.pointerEvents = '';
+      }
+    }
+  };
+
+  // Primary path: the edge strip. Its touch-action:none guarantees the browser
+  // never claims the gesture, and pointer capture keeps every move coming to
+  // it for the whole pull, wherever the finger wanders.
+  const strip = document.getElementById('edgeCatch');
+  strip.addEventListener('pointerdown', e => {
+    try { strip.setPointerCapture(e.pointerId); } catch { /* mouse on old UA */ }
+    beginPull(e);
+  });
+  strip.addEventListener('pointermove', movePull);
+  strip.addEventListener('pointerup', endPull);
+  strip.addEventListener('pointercancel', endPull);
+
+  // Secondary path: pointers that start on the stage inside the edge band
+  // (mice, tests, and any touch the strip missed).
   dom.stage.addEventListener('pointerdown', e => {
     if (bar.classList.contains('shown')) {
       // A tap on the content below the header dismisses it.
@@ -324,27 +379,19 @@ function initTopBar() {
     // is a widget drag, not a request for the bar.
     if (e.clientY <= EDGE_PX &&
         !e.target.closest('.w-grip, .w-chrome, .w-resize')) {
-      pull = { id: e.pointerId, y0: e.clientY };
-      bar.classList.add('dragging');
+      beginPull(e);
     }
   }, true);
 
-  dom.stage.addEventListener('pointermove', e => {
-    if (!pull || e.pointerId !== pull.id) return;
-    // The bar rides the finger down, exactly like a notification shade.
-    const dy = Math.max(0, e.clientY - pull.y0);
-    bar.style.transform = `translateY(${Math.min(0, -barH() + dy)}px)`;
-  }, true);
+  // Belt for the stage path on real touch: a downward drag gets claimed by the
+  // browser as a scroll after ~15px of slop, which pointercancels us halfway.
+  // Cancelling the native touchmove while a pull is live keeps the gesture
+  // ours for its whole length.
+  dom.stage.addEventListener('touchmove', e => {
+    if (pull) e.preventDefault();
+  }, { passive: false, capture: true });
 
-  const endPull = e => {
-    if (!pull || e.pointerId !== pull.id) return;
-    const dy = Math.max(0, e.clientY - pull.y0);
-    bar.classList.remove('dragging');
-    bar.style.transform = '';
-    if (dy > barH() * 0.45) showBar();
-    else { bar.classList.remove('shown'); document.body.classList.remove('bar-open'); }
-    pull = null;
-  };
+  dom.stage.addEventListener('pointermove', movePull, true);
   dom.stage.addEventListener('pointerup', endPull, true);
   dom.stage.addEventListener('pointercancel', endPull, true);
 }

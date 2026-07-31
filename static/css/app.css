@@ -126,6 +126,15 @@ input, textarea, select { font: inherit; }
 }
 body.bar-open .edge-catch { display: none; }
 
+/* Above everything (sheets 60, toast 80): the first touch on a dimmed screen
+   is a wake, never an action. */
+.wake-catch {
+  position: fixed; inset: 0;
+  z-index: 100;
+  touch-action: none;
+}
+.wake-catch[hidden] { display: none; }
+
 /* The only hint that the bar exists. Fades out whenever the bar is open. */
 .reveal-hint {
   position: absolute; top: 7px; left: 50%;

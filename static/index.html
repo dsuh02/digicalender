@@ -54,6 +54,10 @@
        browser can never claim a pull-down as a scroll. Taps are forwarded. -->
   <div class="edge-catch" id="edgeCatch"></div>
 
+  <!-- Present only while idle-dimmed: swallows the waking touch so tapping a
+       dark screen never presses whatever happens to be underneath. -->
+  <div class="wake-catch" id="wakeCatch" hidden></div>
+
   <div class="dots" id="dots" aria-hidden="true"></div>
 </div>
 

@@ -73,6 +73,7 @@ async function boot() {
   setInterval(applyNightDim, 60000);
   initPager();
   initTopBar();
+  initIdleDim();
 }
 
 async function reload() {
@@ -922,6 +923,19 @@ async function editDevice(device, kinds) {
 async function renderDisplay() {
   const s = state.settings;
   const { node, values } = await buildForm([
+    { section: 'Dim when idle' },
+    { key: 'idle_dim', label: 'Dim after inactivity', type: 'toggle',
+      default: (s.idle_dim ?? 'true') !== 'false',
+      help: 'Any touch wakes the screen; the waking touch presses nothing' },
+    { key: 'idle_stage1_min', label: 'Dim after (minutes)', type: 'slider',
+      min: 1, max: 120, default: Number(s.idle_stage1_min || 15) },
+    { key: 'idle_stage1_level', label: 'Dim to (%)', type: 'slider',
+      min: 2, max: 50, default: Number(s.idle_stage1_level ?? 8) },
+    { key: 'idle_stage2_min', label: 'Deep-dim after (minutes)', type: 'slider',
+      min: 5, max: 480, default: Number(s.idle_stage2_min || 60) },
+    { key: 'idle_stage2_level', label: 'Deep-dim to (%)', type: 'slider',
+      min: 0, max: 20, default: Number(s.idle_stage2_level ?? 1) },
+    { section: 'Night schedule' },
     { key: 'night_dim', label: 'Dim overnight', type: 'toggle',
       default: s.night_dim === 'true', help: 'Softens the panel so it is not a lamp at 3am' },
     { key: 'night_start', label: 'Dim from', type: 'time', default: s.night_start || '22:00' },
@@ -931,17 +945,26 @@ async function renderDisplay() {
   ], {});
   return el('div', {}, [
     node,
+    el('p.sheet-note', {
+      text: 'The two dim sources are independent; whichever is darker wins.',
+    }),
     el('button.btn.btn-primary', {
       text: 'Save display settings',
       onclick: async () => {
         try {
           state.settings = await api.saveSettings({
+            idle_dim: String(!!values.idle_dim),
+            idle_stage1_min: String(values.idle_stage1_min ?? 15),
+            idle_stage1_level: String(values.idle_stage1_level ?? 8),
+            idle_stage2_min: String(values.idle_stage2_min ?? 60),
+            idle_stage2_level: String(values.idle_stage2_level ?? 1),
             night_dim: String(!!values.night_dim),
             night_start: values.night_start || '22:00',
             night_end: values.night_end || '07:00',
             night_level: String(values.night_level ?? 45),
           });
           applyNightDim();
+          tickIdle();
           toast('Saved');
         } catch (e) { toast(e.message, true); }
       },
@@ -949,24 +972,82 @@ async function renderDisplay() {
   ]);
 }
 
-/* ------------------------------------------------------------- night dim */
+/* -------------------------------------------------------------- dimming */
+
+/* Two independent dim sources — the night schedule and idle time — and the
+   darker one wins. Each computes its own level; applyDim() combines. */
+
+const idle = { last: Date.now(), level: 1 };
+
+function applyDim() {
+  const eff = Math.max(0, Math.min(state.nightLevel ?? 1, idle.level));
+  const app = document.getElementById('app');
+  const cur = parseFloat(document.documentElement.style.getPropertyValue('--dim') || '1') || 1;
+  // Waking should feel immediate; drifting darker should be unnoticeable.
+  app.style.transition = eff >= cur ? 'filter .3s ease' : 'filter 2.5s ease';
+  document.documentElement.style.setProperty('--dim', String(eff));
+}
 
 function applyNightDim() {
   const s = state.settings || {};
-  if (s.night_dim !== 'true') {
-    document.documentElement.style.removeProperty('--dim');
-    return;
+  let level = 1;
+  if (s.night_dim === 'true') {
+    const toMin = t => {
+      const [h, m] = String(t || '0:0').split(':').map(Number);
+      return (h || 0) * 60 + (m || 0);
+    };
+    const now = new Date();
+    const cur = now.getHours() * 60 + now.getMinutes();
+    const a = toMin(s.night_start || '22:00'), b = toMin(s.night_end || '07:00');
+    const inWindow = a <= b ? (cur >= a && cur < b) : (cur >= a || cur < b);
+    if (inWindow) level = Number(s.night_level || 45) / 100;
   }
-  const toMin = t => {
-    const [h, m] = String(t || '0:0').split(':').map(Number);
-    return (h || 0) * 60 + (m || 0);
+  state.nightLevel = level;
+  applyDim();
+}
+
+function idleCfg() {
+  const s = state.settings || {};
+  return {
+    on: (s.idle_dim ?? 'true') !== 'false',          // on unless switched off
+    m1: Number(s.idle_stage1_min || 15),
+    l1: Number(s.idle_stage1_level ?? 8) / 100,
+    m2: Number(s.idle_stage2_min || 60),
+    l2: Number(s.idle_stage2_level ?? 1) / 100,
   };
-  const now = new Date();
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const a = toMin(s.night_start || '22:00'), b = toMin(s.night_end || '07:00');
-  const inWindow = a <= b ? (cur >= a && cur < b) : (cur >= a || cur < b);
-  document.documentElement.style.setProperty(
-    '--dim', inWindow ? String(Number(s.night_level || 45) / 100) : '1');
+}
+
+function setIdleLevel(v) {
+  if (idle.level === v) return;
+  idle.level = v;
+  // While dimmed, the wake overlay owns the first touch.
+  document.getElementById('wakeCatch').hidden = v === 1;
+  applyDim();
+}
+
+function tickIdle() {
+  const c = idleCfg();
+  if (!c.on) return setIdleLevel(1);
+  const mins = (Date.now() - idle.last) / 60000;
+  setIdleLevel(mins >= c.m2 ? c.l2 : mins >= c.m1 ? c.l1 : 1);
+}
+
+function initIdleDim() {
+  const wake = document.getElementById('wakeCatch');
+  const mark = () => {
+    idle.last = Date.now();
+    if (idle.level !== 1) setIdleLevel(1);
+  };
+  // Any touch or key anywhere is activity. Capture phase, so this runs before
+  // the wake overlay swallows the event.
+  document.addEventListener('pointerdown', mark, true);
+  document.addEventListener('keydown', mark, true);
+  // The waking touch itself must not press anything underneath.
+  for (const t of ['pointerdown', 'pointerup', 'click']) {
+    wake.addEventListener(t, e => { e.stopPropagation(); e.preventDefault(); });
+  }
+  setInterval(tickIdle, 10000);
+  window._idle = { state: idle, tick: tickIdle };    // reachable for testing
 }
 
 document.addEventListener('DOMContentLoaded', boot);

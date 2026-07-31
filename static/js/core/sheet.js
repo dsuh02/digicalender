@@ -29,8 +29,10 @@ export function close() {
   if (backdrop) { backdrop.hidden = true; clear(backdrop); }
 }
 
-/** Generic sheet. `body` is a node; `actions` is a list of {label, kind, onClick}. */
-export function openSheet({ title, body, actions = [], wide = false }) {
+/** Generic sheet. `body` is a node; `actions` is a list of {label, kind, onClick}.
+    `footerStart` renders bottom-left, before the spacer — provenance chips and
+    the like, facts that belong in the footer without being buttons. */
+export function openSheet({ title, body, actions = [], wide = false, footerStart = null }) {
   const root = ensureRoot();
   clear(root);
   const panel = el('div.sheet' + (wide ? '.sheet-wide' : ''), { role: 'dialog', 'aria-modal': 'true' }, [
@@ -38,6 +40,7 @@ export function openSheet({ title, body, actions = [], wide = false }) {
     el('h2.sheet-title', { text: title }),
     el('div.sheet-body', {}, [body]),
     el('div.sheet-actions', {}, [
+      footerStart,
       el('div.spacer'),
       ...actions.map(a => el('button.btn' + (a.kind ? `.btn-${a.kind}` : ''), {
         text: a.label, onclick: () => a.onClick?.(),

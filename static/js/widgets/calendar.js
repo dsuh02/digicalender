@@ -19,13 +19,27 @@ import {
 
 /** Subscribed events are mirrors — an edit here would silently vanish on the
     next sync, so they get a detail view instead of the editor. */
-function openEventDetails(ev) {
+async function openEventDetails(ev) {
   const s = fromApi(ev.start_utc);
   const e = fromApi(ev.end_utc);
   const when = ev.all_day
     ? new Date(`${dateOnly(ev.start_utc)}T00:00:00`).toLocaleDateString([], {
         weekday: 'long', month: 'long', day: 'numeric' }) + ' · all day'
     : `${s.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTime(s)} – ${fmtTime(e)}`;
+
+  // Which of the user's named calendars this came from — bottom-left chip.
+  let feed = null;
+  if (ev.account_id) {
+    try { feed = (await api.feeds()).find(f => f.id === ev.account_id) || null; }
+    catch { feed = null; }
+  }
+  const chip = el('span.cal-chip', {}, [
+    el('span.cal-chip-dot', {
+      style: { backgroundColor: (feed && feed.color) || ev.color || 'var(--primary)' },
+    }),
+    feed ? feed.name : 'Subscribed calendar',
+  ]);
+
   openSheet({
     title: ev.title,
     body: el('div', {}, [
@@ -33,9 +47,10 @@ function openEventDetails(ev) {
       ev.location ? el('p.sheet-note', { text: ev.location }) : null,
       ev.description ? el('p.sheet-note.src-desc', { text: ev.description }) : null,
       el('p.sheet-note', {
-        text: 'From a subscribed calendar — make changes in Google or Outlook and they will appear here on the next sync.',
+        text: 'Read-only — change it in the source calendar and it updates here on the next sync.',
       }),
     ]),
+    footerStart: chip,
     actions: [{ label: 'Close', kind: 'primary', onClick: close }],
   });
 }

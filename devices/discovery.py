@@ -222,6 +222,11 @@ def discover_all(include_samsung: bool = True) -> dict:
 
     # Cloud entries carry the model and win; ARP fills in whatever the cloud
     # doesn't know about (no key yet, or a device on someone else's account).
-    known = {str(d.get("device", "")).upper() for d in results["govee_cloud"]}
-    results["govee_cloud"] += discover_govee_presence(known)
+    # Cloud ids are 8 octets — the hardware MAC is their last 6 — so dedupe on
+    # the suffix or every cloud device shows up twice.
+    known = {str(d.get("device", "")).upper()[-17:] for d in results["govee_cloud"]}
+    results["govee_cloud"] += [
+        p for p in discover_govee_presence(set())
+        if p["device"].upper()[-17:] not in known
+    ]
     return results

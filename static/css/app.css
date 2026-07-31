@@ -433,6 +433,28 @@ input[type="date"], input[type="time"] { color-scheme: dark; }
 .dev-dot.good { background: var(--good); }
 .dev-dot.bad { background: var(--danger); }
 
+/* Calendar sources (feed subscriptions) */
+.src-list { display: flex; flex-direction: column; gap: 6px; }
+.src-row {
+  display: flex; align-items: center; gap: 12px;
+  min-height: var(--tap); padding: 10px 14px;
+  border: 1px solid var(--line); background: var(--bg);
+  border-radius: var(--r-ctl); cursor: pointer;
+}
+.src-dot {
+  width: 12px; height: 12px; border-radius: 50%; flex: none;
+  background: var(--primary);
+  border: 1px solid rgba(127,127,127,.3);
+}
+.src-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.src-name { font-weight: 500; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.src-meta { font-size: 12px; color: var(--text-3); }
+.src-url {
+  max-width: 560px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 12px; opacity: .8;
+}
+.src-desc { white-space: pre-wrap; max-height: 220px; overflow-y: auto; }
+
 .detail-grid { display: grid; grid-template-columns: auto 1fr; gap: 8px 18px; font-size: 14px; }
 .kv-k { color: var(--text-3); }
 .kv-v { color: var(--text); word-break: break-word; font-variant-numeric: tabular-nums; }

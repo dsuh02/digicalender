@@ -43,6 +43,11 @@ const P = {
      tell from the weather `sun`, and "tune this one thing" is what sliders
      mean anyway — the cog stays for app-wide settings. */
   sliders: 'M3 7h18M3 12h18M3 17h18M9 5v4M16 10v4M6 15v4',
+  layers: 'M12 2L2 8l10 6 10-6-10-6zM2 13l10 6 10-6M2 18l10 6 10-6',
+  eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7zM12 15a3 3 0 100-6 3 3 0 000 6z',
+  'eye-off': 'M3 3l18 18M10.6 5.1A10.9 10.9 0 0112 5c6.5 0 10 7 10 7a17.6 17.6 0 01-3.2 3.9M6.6 6.6C3.8 8.5 2 12 2 12s3.5 7 10 7c1.9 0 3.6-.6 5-1.4M9.9 9.9a3 3 0 104.2 4.2',
+  refresh: 'M21 12a9 9 0 11-2.6-6.3M21 3v6h-6',
+  link: 'M10 14a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7M14 10a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7',
   check: 'M20 6L9 17l-5-5',
   trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6',
   wifi: 'M5 12.5a10 10 0 0114 0M8.5 16a5 5 0 017 0M12 20h.01M2 9a15 15 0 0120 0',

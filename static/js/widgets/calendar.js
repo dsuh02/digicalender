@@ -6,6 +6,7 @@
  */
 
 import { api, bus } from '../core/api.js';
+import { icon } from '../core/icons.js';
 import { close, openSheet, toast } from '../core/sheet.js';
 import { eventPalette, getTheme } from '../core/theme.js';
 import {
@@ -16,7 +17,31 @@ import {
 
 /* ------------------------------------------------------------ event editor */
 
+/** Subscribed events are mirrors — an edit here would silently vanish on the
+    next sync, so they get a detail view instead of the editor. */
+function openEventDetails(ev) {
+  const s = fromApi(ev.start_utc);
+  const e = fromApi(ev.end_utc);
+  const when = ev.all_day
+    ? new Date(`${dateOnly(ev.start_utc)}T00:00:00`).toLocaleDateString([], {
+        weekday: 'long', month: 'long', day: 'numeric' }) + ' · all day'
+    : `${s.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTime(s)} – ${fmtTime(e)}`;
+  openSheet({
+    title: ev.title,
+    body: el('div', {}, [
+      el('p.sheet-note', { text: when }),
+      ev.location ? el('p.sheet-note', { text: ev.location }) : null,
+      ev.description ? el('p.sheet-note.src-desc', { text: ev.description }) : null,
+      el('p.sheet-note', {
+        text: 'From a subscribed calendar — make changes in Google or Outlook and they will appear here on the next sync.',
+      }),
+    ]),
+    actions: [{ label: 'Close', kind: 'primary', onClick: close }],
+  });
+}
+
 export function openEventEditor(ev, defaults = {}, onSaved) {
+  if (ev && ev.provider && ev.provider !== 'local') return openEventDetails(ev);
   const allDay0 = ev ? ev.all_day : !!defaults.allDay;
   let start, end;
   if (ev) {
@@ -152,6 +177,58 @@ export function openEventEditor(ev, defaults = {}, onSaved) {
   if (!ev) setTimeout(() => f.title.focus(), 60);
 }
 
+/* ---------------------------------------------------------- source toggles */
+
+/**
+ * The per-source visibility sheet. Deliberately reachable in NORMAL mode from
+ * every calendar widget's header — hiding your work calendar for the evening
+ * must not require unlocking the layout.
+ */
+export async function openCalendarSources() {
+  let feedList = [];
+  try { feedList = await api.feeds(); } catch (e) { toast(e.message, true); return; }
+
+  const body = el('div');
+  if (!feedList.length) {
+    body.append(el('p.sheet-note', {
+      text: 'No calendar subscriptions yet. Use Manage to add Google or Outlook calendars by URL.',
+    }));
+  }
+  const list = el('div.src-list');
+  for (const f of feedList) {
+    const input = el('input.switch-input', { type: 'checkbox' });
+    input.checked = f.visible;
+    input.addEventListener('change', async () => {
+      try {
+        await api.updateFeed(f.id, { visible: input.checked });
+        // The server broadcasts events_changed; every calendar redraws itself.
+      } catch (e) {
+        input.checked = !input.checked;
+        toast(e.message, true);
+      }
+    });
+    list.append(el('label.src-row', {}, [
+      el('span.src-dot', { style: f.color ? { background: f.color } : {} }),
+      el('span.src-main', {}, [
+        el('span.src-name', { text: f.name }),
+        el('span.src-meta', {
+          text: f.count != null ? `${f.count} events` : (f.status || ''),
+        }),
+      ]),
+      input, el('span.switch'),
+    ]));
+  }
+  body.append(list);
+  openSheet({
+    title: 'Calendars',
+    body,
+    actions: [
+      { label: 'Manage…', onClick: () => { close(); window._openSettings?.('Calendars'); } },
+      { label: 'Done', kind: 'primary', onClick: close },
+    ],
+  });
+}
+
 /* -------------------------------------------------------------- scaffolding */
 
 /** Shared shell: compact header + a body the view fills. */
@@ -162,6 +239,10 @@ function calendarShell(host, ctx, { label, onPrev, onNext, onToday, onAdd }) {
     el('button.cw-today', { text: 'Today', onclick: onToday }),
     el('button.cw-nav', { text: '›', 'aria-label': 'Next', onclick: onNext }),
     title,
+    el('button.cw-nav.cw-src', {
+      'aria-label': 'Calendars', title: 'Calendars',
+      onclick: () => openCalendarSources(),
+    }, [icon('layers', 15)]),
     onAdd ? el('button.cw-add', { text: '+', 'aria-label': 'New event', onclick: onAdd }) : null,
   ]);
   const body = el('div.cw-body');

@@ -70,12 +70,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_events_external
     ON events(provider, account_id, external_id)
     WHERE external_id IS NOT NULL;
 
+-- Calendar sources. provider='ics' rows are feed subscriptions whose config
+-- (url, last status) lives in token_json. `enabled` gates syncing; `visible`
+-- gates rendering — hiding a calendar must not stop it staying current.
 CREATE TABLE IF NOT EXISTS accounts (
     id           TEXT PRIMARY KEY,
     provider     TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
     color        TEXT NOT NULL DEFAULT '',
     enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+    visible      BOOLEAN NOT NULL DEFAULT TRUE,
     token_json   JSONB,
     sync_token   TEXT,
     last_sync    TEXT
@@ -208,23 +212,39 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
+SCHEMA_VERSION = 3
+
+
 def init_db() -> None:
     with conn().cursor() as cur:
         cur.execute(SCHEMA)
     row = q("SELECT version FROM schema_version LIMIT 1", fetch="one")
     if row is None:
-        q("INSERT INTO schema_version (version) VALUES (2)")
+        q("INSERT INTO schema_version (version) VALUES (%s)", (SCHEMA_VERSION,))
         seed_default_dashboard()
+        return
+    if row["version"] < 3:
+        # v3: per-source visibility for calendar feeds.
+        q("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS visible BOOLEAN NOT NULL DEFAULT TRUE")
+        q("UPDATE schema_version SET version = 3")
 
 
 # --------------------------------------------------------------------- events
 
 def list_events(start_utc: str, end_utc: str) -> list[dict]:
     """Every event overlapping [start, end) — overlap, not containment, so a
-    multi-day event shows in a window that only touches its middle."""
-    return q("""SELECT * FROM events
-                WHERE deleted = FALSE AND start_utc < %s AND end_utc > %s
-                ORDER BY all_day DESC, start_utc ASC""",
+    multi-day event shows in a window that only touches its middle.
+
+    Filtered by source visibility here rather than in each caller, so hiding a
+    calendar hides it everywhere at once: month, week, day, agenda, reminders.
+    Local events have no account row and are always visible.
+    """
+    return q("""SELECT e.* FROM events e
+                LEFT JOIN accounts a ON e.account_id = a.id
+                WHERE e.deleted = FALSE
+                  AND (e.account_id IS NULL OR a.id IS NULL OR a.visible)
+                  AND e.start_utc < %s AND e.end_utc > %s
+                ORDER BY e.all_day DESC, e.start_utc ASC""",
              (end_utc, start_utc), fetch="all")
 
 
@@ -274,9 +294,82 @@ def delete_event(uid: str) -> bool:
              (now_iso(), uid)) > 0
 
 
-def list_accounts() -> list[dict]:
-    return q("SELECT id, provider, display_name, color, enabled, last_sync FROM accounts",
-             fetch="all")
+def list_accounts(provider: str | None = None) -> list[dict]:
+    if provider:
+        return q("SELECT * FROM accounts WHERE provider = %s ORDER BY display_name",
+                 (provider,), fetch="all")
+    return q("SELECT * FROM accounts ORDER BY provider, display_name", fetch="all")
+
+
+def get_account(aid: str) -> dict | None:
+    return q("SELECT * FROM accounts WHERE id = %s", (aid,), fetch="one")
+
+
+def create_account(data: dict) -> dict:
+    aid = data.get("id") or new_uid()
+    q("""INSERT INTO accounts (id, provider, display_name, color, enabled,
+             visible, token_json, sync_token, last_sync)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,NULL,NULL)""",
+      (aid, data["provider"], data.get("display_name", "") or "",
+       data.get("color", "") or "", data.get("enabled") is not False,
+       data.get("visible") is not False, Jsonb(data.get("token_json") or {})))
+    return get_account(aid)
+
+
+def update_account(aid: str, data: dict) -> dict | None:
+    if not get_account(aid):
+        return None
+    sets, vals = [], []
+    for f in ("display_name", "color", "sync_token", "last_sync"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    for f in ("enabled", "visible"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(bool(data[f]))
+    if "token_json" in data:
+        sets.append("token_json = %s")
+        vals.append(Jsonb(data["token_json"]))
+    if not sets:
+        return get_account(aid)
+    vals.append(aid)
+    q(f"UPDATE accounts SET {', '.join(sets)} WHERE id = %s", vals)
+    # A source's colour tints all of its mirrored events.
+    if "color" in data:
+        q("UPDATE events SET color = %s WHERE account_id = %s", (data["color"] or None, aid))
+    return get_account(aid)
+
+
+def delete_account(aid: str) -> bool:
+    """Feed events are read-only mirrors — remove them with their source."""
+    q("DELETE FROM events WHERE account_id = %s", (aid,))
+    return q("DELETE FROM accounts WHERE id = %s", (aid,)) > 0
+
+
+def replace_feed_events(account_id: str, events: list[dict]) -> int:
+    """One transaction: drop the account's mirror and re-insert the feed's
+    current truth. Hard delete on purpose — tombstones protect local edits
+    being pushed upstream, and a subscription pushes nothing."""
+    c = conn()
+    n = 0
+    with c.transaction(), c.cursor() as cur:
+        cur.execute("DELETE FROM events WHERE account_id = %s", (account_id,))
+        for ev in events:
+            cur.execute(
+                """INSERT INTO events (uid, provider, account_id, calendar_id,
+                       external_id, etag, title, description, location,
+                       start_utc, end_utc, all_day, color, rrule, updated_at,
+                       deleted, dirty)
+                   VALUES (%s,'ics',%s,NULL,%s,NULL,%s,%s,%s,%s,%s,%s,%s,NULL,%s,
+                           FALSE,FALSE)
+                   ON CONFLICT DO NOTHING""",
+                (new_uid(), account_id, ev["external_id"], ev["title"],
+                 ev.get("description", ""), ev.get("location", ""),
+                 ev["start_utc"], ev["end_utc"], bool(ev.get("all_day")),
+                 ev.get("color"), now_iso()))
+            n += cur.rowcount
+    return n
 
 
 # ---------------------------------------------------------------- dashboard

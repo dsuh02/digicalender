@@ -57,8 +57,9 @@ async function boot() {
 
   dom.editBtn.addEventListener('click', toggleEdit);
   dom.addBtn.addEventListener('click', openPalette);
-  dom.settingsBtn.addEventListener('click', openSettings);
+  dom.settingsBtn.addEventListener('click', () => openSettings());
   dom.pageBtn.addEventListener('click', openPageManager);
+  window._openSettings = openSettings;   // calendar widgets jump to the Calendars tab
 
   bus.on('connected', ok => {
     dom.status.classList.toggle('bad', !ok);
@@ -478,14 +479,15 @@ function openPageManager() {
 
 /* --------------------------------------------------------------- settings */
 
-async function openSettings() {
+async function openSettings(initialTab = 'Theme') {
   const body = el('div');
   const tabs = el('div.subtabs');
   const panel = el('div.subpanel');
   body.append(tabs, panel);
 
-  const views = { Theme: renderThemeTab, Devices: renderDevices, Display: renderDisplay };
-  let active = 'Theme';
+  const views = { Theme: renderThemeTab, Calendars: renderCalendars,
+                  Devices: renderDevices, Display: renderDisplay };
+  let active = views[initialTab] ? initialTab : 'Theme';
   const paint = async () => {
     clear(tabs);
     Object.keys(views).forEach(k => tabs.append(el('button.subtab', {
@@ -610,6 +612,119 @@ async function renderThemeTab() {
     ]),
   );
   return wrap;
+}
+
+/* Calendar subscriptions: add by URL, recolour, sync, delete. Visibility also
+   lives here, but its everyday home is the layers button on any calendar
+   widget — reachable without unlocking anything. */
+async function renderCalendars() {
+  const wrap = el('div');
+  let feedList = [];
+  try { feedList = await api.feeds(); } catch (e) { return el('p.sheet-note', { text: e.message }); }
+
+  const list = el('div.dev-list');
+  if (!feedList.length) {
+    list.append(el('p.sheet-note', {
+      text: 'No calendar subscriptions yet. Add a Google or Outlook calendar by its address — nothing is baked in.',
+    }));
+  }
+  for (const f of feedList) {
+    list.append(el('div.dev-row', {}, [
+      el('span.src-dot', { style: f.color ? { background: f.color } : {} }),
+      el('div.dev-main', {}, [
+        el('div.dev-name', { text: f.name + (f.visible ? '' : '  (hidden)') }),
+        el('div.dev-meta', {
+          text: (f.status || 'never synced') +
+                (f.last_sync ? ` · ${new Date(f.last_sync).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''),
+        }),
+        el('div.dev-meta.src-url', { text: f.url }),
+      ]),
+      el('button.btn.btn-small', {
+        text: 'Sync', onclick: async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          try {
+            const r = await api.syncFeed(f.id);
+            toast(r.ok ? `${f.name}: ${r.message}` : r.message, !r.ok);
+          } catch (err) { toast(err.message, true); }
+          openSettings('Calendars');
+        },
+      }),
+      el('button.btn.btn-small', { text: 'Edit', onclick: () => editFeed(f) }),
+    ]));
+  }
+
+  wrap.append(
+    el('div.dev-actions', {}, [
+      el('button.btn.btn-primary', { text: '+ Add calendar', onclick: () => editFeed(null) }),
+      feedList.length ? el('button.btn', {
+        text: 'Sync all', onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          try { await api.syncFeeds(); toast('Synced'); } catch (err) { toast(err.message, true); }
+          openSettings('Calendars');
+        },
+      }) : null,
+    ]),
+    list,
+    el('p.sheet-note', {
+      text: 'Accepted addresses: an ICS/webcal link, an Outlook published-calendar link, or a Google Calendar embed link (converted automatically — the Google calendar must be public, or paste its "Secret address in iCal format" instead). Feeds refresh every 15 minutes.',
+    }),
+  );
+  return wrap;
+}
+
+async function editFeed(feed) {
+  const isNew = !feed;
+  const { node, values } = await buildForm([
+    { key: 'url', label: 'Calendar address', type: 'textarea',
+      placeholder: 'https://…/calendar.ics  or a Google embed link',
+      help: isNew ? '' : 'Leave unchanged unless the address moved' },
+    { key: 'name', label: 'Name', type: 'text', placeholder: 'Work, Family…',
+      help: 'Optional — the feed’s own name is used when blank' },
+    { key: 'color', label: 'Colour', type: 'color' },
+  ], feed ? { url: feed.url, name: feed.name, color: feed.color } : {});
+
+  let busy = false;
+  const actions = [];
+  if (!isNew) {
+    actions.push({
+      label: 'Delete', kind: 'danger', onClick: () => {
+        close();
+        confirmSheet('Remove this calendar?',
+          `“${feed.name}” and all of its events will be removed from the panel. The source calendar is untouched.`,
+          async () => {
+            try { await api.deleteFeed(feed.id); toast('Removed'); } catch (e) { toast(e.message, true); }
+            openSettings('Calendars');
+          });
+      },
+    });
+  }
+  actions.push({ label: 'Cancel', onClick: () => { close(); openSettings('Calendars'); } });
+  actions.push({
+    label: isNew ? 'Add' : 'Save', kind: 'primary', onClick: async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        if (isNew) {
+          if (!String(values.url || '').trim()) { toast('Paste a calendar address first', true); busy = false; return; }
+          toast('Fetching the calendar…');
+          const r = await api.createFeed({ url: values.url, name: values.name, color: values.color });
+          toast(`Imported ${r.imported} events${r.warnings ? ` (${r.warnings} skipped)` : ''}`);
+        } else {
+          const patch = { name: values.name, color: values.color };
+          if (String(values.url || '').trim() && values.url !== feed.url) patch.url = values.url;
+          await api.updateFeed(feed.id, patch);
+          toast('Saved');
+        }
+        close();
+        openSettings('Calendars');
+      } catch (e) {
+        toast(e.message, true);
+      }
+      busy = false;
+    },
+  });
+  openSheet({ title: isNew ? 'Add calendar' : 'Edit calendar', body: node, actions });
 }
 
 async function renderDevices() {

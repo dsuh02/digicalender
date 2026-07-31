@@ -23,7 +23,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import devices as device_registry
+import feeds
 import hub
+import ics
 import providers
 import store
 import weather
@@ -39,6 +41,23 @@ class ApiError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+def _feed_view(acct: dict) -> dict:
+    """The shape the UI works with — flattens the token_json internals."""
+    cfg = acct.get("token_json") or {}
+    return {
+        "id": acct["id"],
+        "name": acct.get("display_name") or "Calendar",
+        "color": acct.get("color") or "",
+        "url": cfg.get("source_url") or cfg.get("url", ""),
+        "fetch_url": cfg.get("url", ""),
+        "visible": bool(acct.get("visible", True)),
+        "enabled": bool(acct.get("enabled", True)),
+        "last_sync": acct.get("last_sync"),
+        "status": cfg.get("last_status", ""),
+        "count": cfg.get("last_count"),
+    }
 
 
 # --------------------------------------------------------------- validation
@@ -220,18 +239,111 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/accounts":
             return self._json(200, {"accounts": store.list_accounts()})
         if path == "/api/sync" and method == "POST":
-            results = []
+            results = [{"provider": "ics", **r} for r in feeds.sync_all()]
             for acct in store.list_accounts():
-                if not acct["enabled"]:
+                if not acct["enabled"] or acct["provider"] == "ics":
                     continue
                 try:
                     results.append(providers.get(acct["provider"], acct).sync().as_dict())
                 except KeyError as e:
                     results.append({"ok": False, "message": str(e)})
+            if any(r.get("changed") for r in results):
+                hub.bus.publish("events_changed", {})
             if not results:
                 results.append({"provider": "local", "ok": True,
                                 "message": "Local calendar only — no accounts connected yet."})
             return self._json(200, {"results": results})
+
+        # ---- calendar feed subscriptions
+        if path == "/api/feeds":
+            if method == "GET":
+                return self._json(200, {"feeds": [_feed_view(a) for a in
+                                                  store.list_accounts(provider="ics")]})
+            if method == "POST":
+                b = self._body()
+                raw_url = (b.get("url") or "").strip()
+                if not raw_url:
+                    raise ApiError(400, "url is required")
+                fetch_url, note = feeds.normalize_url(raw_url)
+                # Validate BEFORE creating anything — a feed that can't be
+                # fetched right now would only ever be a zombie row.
+                text, etag, err = ics.fetch(fetch_url)
+                if err:
+                    raise ApiError(400, err + (f" ({note})" if note else ""))
+                try:
+                    events, calname, warnings = ics.to_events(text)
+                except Exception as e:
+                    raise ApiError(400, f"that URL fetched, but is not a usable calendar: {e}")
+                name = (b.get("name") or "").strip() or calname or "Calendar"
+                acct = store.create_account({
+                    "provider": "ics", "display_name": name[:80],
+                    "color": (b.get("color") or "")[:20],
+                    "token_json": {"url": fetch_url, "source_url": raw_url,
+                                   "last_status": f"ok: {len(events)} events",
+                                   "last_count": len(events)},
+                })
+                for ev in events:
+                    ev["color"] = acct.get("color") or None
+                store.replace_feed_events(acct["id"], events)
+                store.update_account(acct["id"], {"sync_token": etag,
+                                                  "last_sync": store.now_iso()})
+                hub.bus.publish("events_changed", {})
+                return self._json(201, {"feed": _feed_view(store.get_account(acct["id"])),
+                                        "imported": len(events), "note": note,
+                                        "warnings": len(warnings)})
+            raise ApiError(405, "method not allowed")
+
+        if path == "/api/feeds/sync" and method == "POST":
+            results = feeds.sync_all()
+            if any(r.get("changed") for r in results):
+                hub.bus.publish("events_changed", {})
+            return self._json(200, {"results": results})
+
+        m = re.fullmatch(rf"/api/feeds/{ID_RE}/sync", path)
+        if m and method == "POST":
+            acct = store.get_account(m.group(1))
+            if not acct or acct["provider"] != "ics":
+                raise ApiError(404, "feed not found")
+            res = feeds.sync_account(acct)
+            if res.get("changed"):
+                hub.bus.publish("events_changed", {})
+            return self._json(200 if res["ok"] else 502, res)
+
+        m = re.fullmatch(rf"/api/feeds/{ID_RE}", path)
+        if m:
+            aid = m.group(1)
+            acct = store.get_account(aid)
+            if not acct or acct["provider"] != "ics":
+                raise ApiError(404, "feed not found")
+            if method == "PATCH":
+                b = self._body()
+                data = {}
+                if "name" in b:
+                    data["display_name"] = str(b["name"])[:80]
+                if "color" in b:
+                    data["color"] = str(b["color"] or "")[:20]
+                for f in ("visible", "enabled"):
+                    if f in b:
+                        data[f] = bool(b[f])
+                if "url" in b and str(b["url"]).strip():
+                    fetch_url, _ = feeds.normalize_url(str(b["url"]).strip())
+                    cfg = dict(acct.get("token_json") or {})
+                    cfg["url"] = fetch_url
+                    cfg["source_url"] = str(b["url"]).strip()
+                    data["token_json"] = cfg
+                    data["sync_token"] = None       # force a full refetch
+                acct = store.update_account(aid, data)
+                if "url" in b and str(b["url"]).strip():
+                    feeds.sync_account(acct)
+                    acct = store.get_account(aid)
+                # Visibility and colour change what every calendar shows.
+                hub.bus.publish("events_changed", {})
+                return self._json(200, {"feed": _feed_view(acct)})
+            if method == "DELETE":
+                store.delete_account(aid)
+                hub.bus.publish("events_changed", {})
+                return self._json(200, {"ok": True})
+            raise ApiError(405, "method not allowed")
 
         # ---- events
         if path == "/api/events":

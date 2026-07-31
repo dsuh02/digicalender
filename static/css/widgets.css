@@ -19,7 +19,8 @@
   transition: background .12s ease, color .12s ease;
 }
 .cw-nav:active, .cw-today:active, .cw-add:active { background: var(--surface-2); color: var(--text); }
-.cw-add { margin-left: auto; font-size: 18px; line-height: 1; }
+.cw-src { margin-left: auto; display: grid; place-items: center; min-width: 34px; }
+.cw-add { font-size: 18px; line-height: 1; }
 .cw-title {
   flex: 1; text-align: center; font-size: 15px; font-weight: 550;
   letter-spacing: -.01em; color: var(--text);

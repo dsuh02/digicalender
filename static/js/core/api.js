@@ -72,6 +72,14 @@ export const api = {
   deleteScene: id => req(`/api/scenes/${id}`, { method: 'DELETE' }),
   runScene: id => req(`/api/scenes/${id}/run`, { method: 'POST' }),
 
+  // calendar feed subscriptions
+  feeds: () => req('/api/feeds').then(r => r.feeds),
+  createFeed: d => req('/api/feeds', { method: 'POST', body: JSON.stringify(d) }),
+  updateFeed: (id, d) => req(`/api/feeds/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.feed),
+  deleteFeed: id => req(`/api/feeds/${id}`, { method: 'DELETE' }),
+  syncFeed: id => req(`/api/feeds/${id}/sync`, { method: 'POST' }),
+  syncFeeds: () => req('/api/feeds/sync', { method: 'POST' }).then(r => r.results),
+
   weather: (lat, lon, units = 'imperial', days = 5) =>
     req(`/api/weather?lat=${lat}&lon=${lon}&units=${units}&days=${days}`),
 

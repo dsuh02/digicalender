@@ -33,6 +33,7 @@ import store
 POLL_INTERVAL = 6.0        # seconds between device sweeps
 REMINDER_INTERVAL = 60.0
 REMINDER_LEAD_MIN = 10     # notify this long before an event starts
+FEED_INTERVAL = 900.0      # calendar subscriptions refresh every 15 minutes
 
 
 class Broadcaster:
@@ -184,6 +185,21 @@ def _reminder_loop(stop: threading.Event) -> None:
         stop.wait(REMINDER_INTERVAL)
 
 
+def _feed_loop(stop: threading.Event) -> None:
+    """Keep calendar subscriptions fresh. First run happens shortly after boot
+    so a restart never shows stale meetings for 15 minutes."""
+    import feeds                      # local import: feeds -> store only
+    stop.wait(20)
+    while not stop.is_set():
+        try:
+            results = feeds.sync_all()   # network I/O; no DB conn held across it
+            if any(r.get("changed") for r in results):
+                bus.publish("events_changed", {})
+        except Exception:
+            pass
+        stop.wait(FEED_INTERVAL)
+
+
 _stop = threading.Event()
 _threads: list[threading.Thread] = []
 
@@ -192,7 +208,8 @@ def start() -> None:
     if _threads:
         return
     for fn, name in ((_device_loop, "device-poller"),
-                     (_reminder_loop, "reminder-ticker")):
+                     (_reminder_loop, "reminder-ticker"),
+                     (_feed_loop, "feed-sync")):
         t = threading.Thread(target=fn, args=(_stop,), name=name, daemon=True)
         t.start()
         _threads.append(t)

@@ -30,7 +30,11 @@ from datetime import datetime, timedelta, timezone
 import devices as device_registry
 import store
 
-POLL_INTERVAL = 6.0        # seconds between device sweeps
+POLL_INTERVAL = 6.0        # seconds between device sweeps (LAN devices)
+CLOUD_POLL_INTERVAL = 120.0  # cloud-backed devices: Govee's API is rate-limited
+                             # (10k/day); a 6s cadence would burn 14k calls per
+                             # device per day and 429 within the hour — seen live.
+CLOUD_KINDS = {"govee_cloud"}
 REMINDER_INTERVAL = 60.0
 REMINDER_LEAD_MIN = 10     # notify this long before an event starts
 FEED_INTERVAL = 900.0      # calendar subscriptions refresh every 15 minutes
@@ -78,6 +82,9 @@ bus = Broadcaster()
 _last_states: dict[str, dict] = {}
 _states_lock = threading.Lock()
 
+# device id -> monotonic time of its last poll, for rate-limited kinds.
+_last_polled: dict[str, float] = {}
+
 
 def snapshot() -> dict:
     with _states_lock:
@@ -102,6 +109,7 @@ def set_state(device_id: str, state: dict, *, broadcast: bool = True) -> bool:
 def poll_device_now(device: dict) -> dict:
     """Poll one device and record the result. Safe to call from a request
     thread — used right after a command so the UI doesn't wait for the sweep."""
+    _last_polled[device["id"]] = time.monotonic()
     adapter = device_registry.adapter_for(device)
     if adapter is None:
         return {}
@@ -130,6 +138,12 @@ def _device_loop(stop: threading.Event) -> None:
             if stop.is_set():
                 break
             try:
+                # Cloud-backed devices poll on their own, slower clock; a
+                # command still refreshes them immediately via poll_device_now.
+                if d["kind"] in CLOUD_KINDS:
+                    if time.monotonic() - _last_polled.get(d["id"], 0) < CLOUD_POLL_INTERVAL:
+                        continue
+                    _last_polled[d["id"]] = time.monotonic()
                 adapter = device_registry.adapter_for(d)
                 if adapter is None:
                     continue

@@ -7,8 +7,9 @@
 
 import { api, bus } from '../core/api.js';
 import { close, openSheet, toast } from '../core/sheet.js';
+import { eventPalette, getTheme } from '../core/theme.js';
 import {
-  DEFAULT_COLOR, DOW, EVENT_COLORS, MONTHS, addDays, addMonths, clear,
+  DOW, MONTHS, addDays, addMonths, clear,
   dateOnly, dayKey, el, eventsForDay, fmtHour, fmtTime, fromApi, layoutColumns,
   relativeTime, sameDay, shiftKey, startOfDay, startOfWeek, toApi,
 } from '../core/util.js';
@@ -33,7 +34,8 @@ export function openEventEditor(ev, defaults = {}, onSaved) {
     end = new Date(start.getTime() + 3600000);
   }
 
-  let color = ev?.color || DEFAULT_COLOR;
+  const palette = eventPalette(getTheme());
+  let color = ev?.color || palette[0].value;
   const f = {
     title: el('input.input', { type: 'text', maxlength: 500, placeholder: "What's happening?" }),
     allDay: el('input.switch-input', { type: 'checkbox' }),
@@ -60,7 +62,13 @@ export function openEventEditor(ev, defaults = {}, onSaved) {
   const swatches = el('div.swatches');
   const paint = () => [...swatches.children].forEach(b =>
     b.setAttribute('aria-pressed', String(b.dataset.value === color)));
-  EVENT_COLORS.forEach(c => swatches.append(el('button.swatch', {
+  // Theme palette, plus the event's own colour if it predates the current
+  // theme — otherwise an old event opens with nothing selected.
+  const options = [...palette];
+  if (ev?.color && !options.some(c => c.value === ev.color)) {
+    options.unshift({ name: 'current', value: ev.color });
+  }
+  options.forEach(c => swatches.append(el('button.swatch', {
     type: 'button', dataset: { value: c.value }, style: { background: c.value },
     'aria-label': c.name, onclick: () => { color = c.value; paint(); },
   })));
@@ -198,9 +206,10 @@ function liveCalendar(render) {
 
 const chip = (ev, reload) => {
   // JS hands CSS a colour and nothing else; how that colour is expressed
-  // (a rule, a dot, a fill) is a styling decision, not a data one.
+  // (a rule, a dot, a fill) is a styling decision, not a data one. No colour
+  // stored → no --c set, and CSS falls back to the theme primary.
   const node = el('div.chip', {
-    style: { '--c': ev.color || DEFAULT_COLOR },
+    style: ev.color ? { '--c': ev.color } : {},
     onclick: e => { e.stopPropagation(); openEventEditor(ev, {}, reload); },
   });
   if (!ev.all_day) node.append(el('span.t', { text: fmtTime(fromApi(ev.start_utc)) }));
@@ -310,12 +319,13 @@ function drawTimeGrid(body, { cursor, events, settings, reload }, nDays, firstDa
       const top = Math.max(0, (s - dayStart) / 3600000) * hourH;
       const bottom = Math.min(hours * 3600000, e - dayStart) / 3600000 * hourH;
       const h = Math.max(20, bottom - top - 2);
+      const style = {
+        top: top + 'px', height: h + 'px',
+        left: `calc(${(ci / nc) * 100}% + 2px)`, width: `calc(${(1 / nc) * 100}% - 4px)`,
+      };
+      if (ev.color) style['--c'] = ev.color;
       const node = el('div.ev' + (h < 40 ? '.ev-compact' : ''), {
-        style: {
-          top: top + 'px', height: h + 'px',
-          left: `calc(${(ci / nc) * 100}% + 2px)`, width: `calc(${(1 / nc) * 100}% - 4px)`,
-          '--c': ev.color || DEFAULT_COLOR,
-        },
+        style,
         onclick: e2 => { e2.stopPropagation(); openEventEditor(ev, {}, reload); },
       }, [
         el('div.ev-title', { text: ev.title }),
@@ -451,7 +461,7 @@ export const AgendaWidget = {
         }
         const rel = ev.all_day ? '' : relativeTime(fromApi(ev.start_utc), now);
         body.append(el('div.agenda-item', {
-          style: { '--c': ev.color || DEFAULT_COLOR },
+          style: ev.color ? { '--c': ev.color } : {},
           onclick: () => openEventEditor(ev, {}, load),
         }, [
           el('div.agenda-when', { text: ev.all_day ? 'All day' : fmtTime(fromApi(ev.start_utc)) }),

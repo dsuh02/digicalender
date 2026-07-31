@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     id           TEXT PRIMARY KEY,
     provider     TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
-    color        TEXT NOT NULL DEFAULT '#6c86c8',
+    color        TEXT NOT NULL DEFAULT '',
     enabled      BOOLEAN NOT NULL DEFAULT TRUE,
     token_json   JSONB,
     sync_token   TEXT,
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
     icon       TEXT NOT NULL DEFAULT 'sparkles',
-    color      TEXT NOT NULL DEFAULT '#6c86c8',
+    color      TEXT NOT NULL DEFAULT '',
     actions    JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TEXT NOT NULL
 );
@@ -552,7 +552,7 @@ def get_scene(sid: str) -> dict | None:
 def create_scene(data: dict) -> dict:
     sid = new_uid()
     q("INSERT INTO scenes (id, name, icon, color, actions, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
-      (sid, data["name"], data.get("icon", "sparkles"), data.get("color", "#6c86c8"),
+      (sid, data["name"], data.get("icon", "sparkles"), data.get("color") or "",
        Jsonb(data.get("actions", [])), now_iso()))
     return get_scene(sid)
 

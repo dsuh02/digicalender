@@ -1,56 +1,54 @@
 /* Base theme + chrome. 1920x1080 wall panel, driven by a finger.
  *
- * Visual rules, in order of priority:
- *   1. Hierarchy comes from SURFACE and TYPE, not from colour. Panels differ by
- *      a few points of lightness and a hairline rule — never by a coloured
- *      border or a translucent tint behind everything.
- *   2. Colour is an INDICATOR, not a fill: a 2px rule, a small dot, an icon.
- *      Nothing gets a saturated wash; that is what makes a dark UI look neon.
- *   3. No gradients and no glows. A fading edge reads as decoration; a flat
- *      surface with a crisp 1px line reads as built.
- *   4. Accent colours are desaturated on purpose. On a panel that is lit all
- *      day in a living room, full-chroma hues are fatiguing and cheap-looking.
+ * Every colour here is a variable written by core/theme.js at boot. The values
+ * in :root are only a fallback so the first paint isn't unstyled — edit the
+ * theme engine, not these.
  *
- * Still touch-first: nothing interactive under 56px, no hover-only affordance,
- * feedback on :active.
+ * Visual rules, in priority order:
+ *   1. Hierarchy comes from SURFACE and TYPE, not colour. Panels differ by a
+ *      few points of lightness and a hairline — never a coloured border or a
+ *      translucent tint behind everything.
+ *   2. Colour is an INDICATOR, not a fill: a 2px rule, a small dot, an icon.
+ *   3. No gradients, no glows. A fading edge reads as decoration.
+ *   4. Three accent ROLES, never used interchangeably —
+ *        primary   = interaction and selection
+ *        secondary = device / home state
+ *        tertiary  = informational accents
  */
 
 :root {
-  /* Surfaces — four steps, each a small lightness increment. */
   --bg:          #0b0d10;
-  --surface:     #131619;   /* widget cards */
-  --surface-2:   #191d22;   /* controls, rows, raised areas */
-  --surface-3:   #22272d;   /* pressed */
-
-  --line:        #23282e;   /* hairline */
-  --line-strong: #2f353d;   /* emphasis, edit-mode outlines */
+  --surface:     #131619;
+  --surface-2:   #191d22;
+  --surface-3:   #22272d;
+  --line:        #23282e;
+  --line-strong: #2f353d;
 
   --text:        #e7e9ec;
   --text-2:      #a2aab4;
   --text-3:      #6b7480;
 
-  /* One restrained accent. Muted indigo, not electric blue. */
-  --accent:      #6478d0;
-  --accent-ink:  #ffffff;
-  --accent-soft: #1b2030;   /* accent at ~8% over --surface, precomputed */
+  --primary:      #6478d0;
+  --primary-ink:  #ffffff;
+  --primary-soft: #1b2030;
+  --primary-line: #2b3348;
+  --secondary:      #5b95a0;
+  --secondary-ink:  #ffffff;
+  --secondary-soft: #182428;
+  --tertiary:      #c2914f;
+  --tertiary-ink:  #0b0d10;
+  --tertiary-soft: #2a2419;
 
-  /* Desaturated status + category hues. */
   --danger:      #c4707d;
   --warn:        #c2914f;
   --good:        #7d9e6b;
-
-  --c-blue:      #6c86c8;
-  --c-green:     #7d9e6b;
-  --c-purple:    #907fb4;
-  --c-amber:     #c2914f;
-  --c-rose:      #c07281;
-  --c-teal:      #5b95a0;
 
   --tap: 56px;
   --r-card: 10px;
   --r-ctl: 8px;
   --r-chip: 5px;
   --dim: 1;
+  --bar-h: 62px;
 }
 
 * { box-sizing: border-box; }
@@ -67,8 +65,6 @@ html, body {
   text-rendering: optimizeLegibility;
 }
 
-/* Kiosk hygiene: no long-press menu, no selection, no double-tap zoom.
-   Inputs opt back in below. */
 body {
   -webkit-user-select: none;
   user-select: none;
@@ -80,8 +76,7 @@ body {
 
 #app {
   height: 100%;
-  display: flex;
-  flex-direction: column;
+  position: relative;
   filter: brightness(var(--dim));
   transition: filter 1.5s ease;
 }
@@ -89,7 +84,6 @@ body {
 button { font: inherit; color: inherit; }
 input, textarea, select { font: inherit; }
 
-/* Shared label treatment — small caps, wide tracking, quiet colour. */
 .field-label, .form-section, .dow-row div, .tv-dow, .tv-allday-label,
 .agenda-day, .notif-count {
   font-size: 11px;
@@ -101,16 +95,37 @@ input, textarea, select { font: inherit; }
 
 /* ------------------------------------------------------------------ topbar */
 
+/* Overlays the page rather than reserving space: the wall is for content, and
+   the bar is summoned by a pull-down from the top edge. */
 .topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 40;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 0 16px;
-  height: 62px;
-  flex: none;
+  height: var(--bar-h);
   background: var(--surface);
   border-bottom: 1px solid var(--line);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .38);
+  transform: translateY(-100%);
+  transition: transform .30s cubic-bezier(.22, .61, .36, 1);
 }
+.topbar.shown { transform: translateY(0); }
+/* While a drag is in progress the handler drives transform directly. */
+.topbar.dragging { transition: none; }
+
+/* The only hint that the bar exists. Fades out whenever the bar is open. */
+.reveal-hint {
+  position: absolute; top: 7px; left: 50%;
+  width: 42px; height: 3px; margin-left: -21px;
+  border-radius: 2px;
+  background: var(--text-3);
+  opacity: .22;
+  z-index: 30;
+  pointer-events: none;
+  transition: opacity .25s ease;
+}
+body.bar-open .reveal-hint { opacity: 0; }
 
 .brand {
   display: flex; align-items: center; gap: 9px;
@@ -150,22 +165,40 @@ input, textarea, select { font: inherit; }
 }
 .icon-btn:active { background: var(--surface-3); }
 .icon-btn[aria-pressed="true"] {
-  background: var(--accent-soft);
-  border-color: var(--accent);
+  background: var(--primary-soft);
+  border-color: var(--primary);
   color: var(--text);
 }
 .icon-btn[hidden] { display: none; }
 
-/* Connection state: a small ring, not a glowing dot. */
-.status {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--good); flex: none; margin: 0 4px;
-}
+.status { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; margin: 0 4px; }
 .status.bad { background: var(--warn); }
 
-/* -------------------------------------------------------------------- stage */
+/* -------------------------------------------------------------------- pager */
 
-.stage { position: relative; flex: 1; overflow: hidden; }
+/* All pages live in one horizontal track so a two-finger drag can move them
+   under the finger; only the transform changes during a swipe. */
+.stage { position: absolute; inset: 0; overflow: hidden; }
+
+.pager {
+  display: flex;
+  height: 100%;
+  will-change: transform;
+}
+.pager.animating { transition: transform .36s cubic-bezier(.22, .61, .36, 1); }
+
+.page { flex: 0 0 100%; height: 100%; position: relative; min-width: 0; }
+
+.dots {
+  position: absolute; bottom: 7px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 8px; z-index: 30; pointer-events: none;
+}
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-3); opacity: .30;
+  transition: opacity .2s ease, background .2s ease, width .2s ease;
+}
+.dot.on { background: var(--primary); opacity: 1; width: 18px; border-radius: 3px; }
 
 /* -------------------------------------------------------------------- btns */
 
@@ -185,17 +218,17 @@ input, textarea, select { font: inherit; }
 .btn:disabled { opacity: .45; }
 .btn-small { min-height: 40px; padding: 0 13px; font-size: 14px; }
 .btn-primary {
-  background: var(--accent); color: var(--accent-ink);
-  border-color: var(--accent); font-weight: 550;
+  background: var(--primary); color: var(--primary-ink);
+  border-color: var(--primary); font-weight: 550;
 }
-.btn-primary:active { filter: brightness(.92); background: var(--accent); }
+.btn-primary:active { filter: brightness(.92); background: var(--primary); }
 .btn-danger { background: transparent; color: var(--danger); border-color: var(--line-strong); }
 
 /* ------------------------------------------------------------------ sheets */
 
 .sheet-backdrop {
   position: fixed; inset: 0;
-  background: rgba(6, 8, 10, .72);
+  background: rgba(0, 0, 0, .62);
   display: flex; align-items: flex-end; justify-content: center;
   z-index: 60;
 }
@@ -232,11 +265,7 @@ input, textarea, select { font: inherit; }
 
 /* ------------------------------------------------------------------- forms */
 
-.form-section {
-  margin: 22px 0 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--line);
-}
+.form-section { margin: 22px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .field { display: block; margin-bottom: 16px; }
 .field-label { display: block; margin-bottom: 7px; }
 .field-help { display: block; font-size: 13px; color: var(--text-3); margin-top: 6px; line-height: 1.45; }
@@ -255,7 +284,7 @@ input, textarea, select { font: inherit; }
   transition: border-color .12s ease;
 }
 .input::placeholder { color: var(--text-3); }
-.input:focus { outline: none; border-color: var(--line-strong); }
+.input:focus { outline: none; border-color: var(--primary); }
 textarea.input { resize: none; min-height: 70px; line-height: 1.5; }
 select.input {
   appearance: none;
@@ -268,13 +297,12 @@ select.input {
   padding-right: 38px;
 }
 input[type="date"], input[type="time"] { color-scheme: dark; }
+:root[data-scheme="light"] input[type="date"],
+:root[data-scheme="light"] input[type="time"] { color-scheme: light; }
 
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 
-.row-toggle {
-  display: flex; align-items: center; gap: 14px;
-  margin-bottom: 16px; min-height: var(--tap); flex-wrap: wrap;
-}
+.row-toggle { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; min-height: var(--tap); flex-wrap: wrap; }
 .row-toggle .field-label { margin: 0; flex: 1; }
 .switch-input { position: absolute; opacity: 0; pointer-events: none; }
 .switch {
@@ -287,23 +315,15 @@ input[type="date"], input[type="time"] { color-scheme: dark; }
   width: 22px; height: 22px; border-radius: 50%;
   background: var(--text-3); transition: transform .16s ease, background .16s ease;
 }
-.switch-input:checked + .switch { background: var(--accent); border-color: var(--accent); }
-.switch-input:checked + .switch::after { transform: translateX(22px); background: #fff; }
+.switch-input:checked + .switch { background: var(--primary); border-color: var(--primary); }
+.switch-input:checked + .switch::after { transform: translateX(22px); background: var(--primary-ink); }
 
 .slider-row { display: flex; align-items: center; gap: 14px; }
-.slider { flex: 1; height: 36px; accent-color: var(--accent); }
-.slider-value {
-  min-width: 42px; text-align: right;
-  font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 15px;
-}
+.slider { flex: 1; height: 36px; accent-color: var(--primary); }
+.slider-value { min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 15px; }
 
-/* Swatches: a ring on the chosen one, no glow. */
 .swatches { display: flex; gap: 10px; flex-wrap: wrap; }
-.swatch {
-  width: 40px; height: 40px; border-radius: 50%;
-  border: 1px solid rgba(255,255,255,.10);
-  cursor: pointer; position: relative;
-}
+.swatch { width: 40px; height: 40px; border-radius: 50%; border: 1px solid rgba(127,127,127,.28); cursor: pointer; position: relative; }
 .swatch[aria-pressed="true"]::after {
   content: ""; position: absolute; inset: -5px;
   border: 1.5px solid var(--text-2); border-radius: 50%;
@@ -325,10 +345,9 @@ input[type="date"], input[type="time"] { color-scheme: dark; }
   border-radius: var(--r-ctl); cursor: pointer;
 }
 .picker-item[aria-pressed="true"] { border-color: var(--line-strong); background: var(--surface-2); }
-/* Selected state marked by a rule, not a colour fill. */
 .picker-item[aria-pressed="true"] .picker-name::before {
   content: ""; display: inline-block; width: 2px; height: 13px;
-  background: var(--accent); margin-right: 9px; vertical-align: -2px;
+  background: var(--primary); margin-right: 9px; vertical-align: -2px;
 }
 .picker-name { font-weight: 500; font-size: 15px; }
 .picker-meta { font-size: 13px; color: var(--text-3); }
@@ -336,6 +355,45 @@ input[type="date"], input[type="time"] { color-scheme: dark; }
 .latlon { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: center; }
 .form-error { color: var(--danger); font-size: 14px; margin: 0 0 10px; }
 .form-error[hidden] { display: none; }
+
+/* ------------------------------------------------------------ theme editor */
+
+.theme-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.preset {
+  display: flex; flex-direction: column; gap: 9px; align-items: flex-start;
+  padding: 12px; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card);
+  color: var(--text-2); font-size: 13px;
+}
+.preset[aria-pressed="true"] { border-color: var(--line-strong); background: var(--surface-2); color: var(--text); }
+.preset-chips { display: flex; gap: 5px; }
+.preset-chip { width: 20px; height: 20px; border-radius: 5px; border: 1px solid rgba(127,127,127,.22); }
+
+/* Hue slider: the track IS the choice, so there is nothing to learn. */
+.hue-row { display: flex; align-items: center; gap: 14px; }
+.hue-slider {
+  flex: 1; height: 40px; appearance: none; background: transparent; cursor: pointer;
+}
+.hue-slider::-webkit-slider-runnable-track {
+  height: 14px; border-radius: 7px;
+  background: linear-gradient(to right,
+    hsl(0 60% 58%), hsl(60 60% 58%), hsl(120 60% 58%),
+    hsl(180 60% 58%), hsl(240 60% 58%), hsl(300 60% 58%), hsl(360 60% 58%));
+  border: 1px solid rgba(127,127,127,.25);
+}
+.hue-slider::-webkit-slider-thumb {
+  appearance: none; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--role-color, var(--primary));
+  border: 3px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--line-strong);
+  margin-top: -7px;
+}
+.role-swatch {
+  width: 42px; height: 42px; border-radius: 10px; flex: none;
+  border: 1px solid rgba(127,127,127,.25);
+  background: var(--role-color, var(--primary));
+}
+.role-where { font-size: 12px; color: var(--text-3); margin-top: 5px; line-height: 1.4; }
 
 /* ---------------------------------------------------------------- palette */
 
@@ -359,7 +417,7 @@ input[type="date"], input[type="time"] { color-scheme: dark; }
   border: none; border-bottom: 2px solid transparent;
   background: transparent; color: var(--text-3); cursor: pointer; font-size: 15px;
 }
-.subtab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.subtab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--primary); }
 
 .dev-actions { display: flex; gap: 8px; margin-bottom: 14px; }
 .dev-list { display: flex; flex-direction: column; gap: 6px; }

@@ -68,10 +68,11 @@ function tile(device, opts = {}) {
   const state = liveStates.get(device.id) || device.state || {};
   const online = state.online !== false;
   const on = !!state.on;
-  const accent = opts.color || (device.kind.startsWith('govee') ? '#c2914f' : '#6c86c8');
 
+  // No explicit colour → CSS falls back to the theme's SECONDARY role, which
+  // is the "device state" colour by definition.
   const node = el('button.tile' + (on ? '.on' : '') + (online ? '' : '.offline'), {
-    style: { '--c': accent },
+    style: opts.color ? { '--c': opts.color } : {},
     onclick: () => {
       if (node._suppressClick) { node._suppressClick = false; return; }
       if (!online) { deviceDetail(device, state); return; }
@@ -100,7 +101,8 @@ export const DeviceGridWidget = {
     { key: 'room', label: 'Only this room', type: 'text',
       help: 'Optional filter, matched exactly' },
     { key: 'columns', label: 'Columns', type: 'slider', min: 1, max: 8, default: 3 },
-    { key: 'accent', label: 'On colour', type: 'color', default: '#6c86c8' },
+    { key: 'accent', label: 'On colour', type: 'color',
+      help: 'Leave untouched to follow the theme' },
   ],
   render(host, ctx) {
     let devices = [];
@@ -327,7 +329,7 @@ export const ScenesWidget = {
       clear(body);
       body.style.gridTemplateColumns = `repeat(${Number(ctx.settings.columns || 2)}, 1fr)`;
       scenes.forEach(s => {
-        const btn = el('button.scene', { style: { '--c': s.color || '#6c86c8' },
+        const btn = el('button.scene', { style: s.color ? { '--c': s.color } : {},
           onclick: async () => {
             if (btn._suppressClick) { btn._suppressClick = false; return; }
             btn.classList.add('running');

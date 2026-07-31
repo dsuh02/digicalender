@@ -1,9 +1,15 @@
-/* App shell: pages, edit mode, the widget palette, device management.
+/* App shell: the pager, the auto-hiding top bar, edit mode, the widget
+ * palette, device management and the theme editor.
  *
- * Edit mode is modal on purpose (the lock button in the top bar). On a touch
- * panel that lives on a wall, a drag gesture that's always live means every
- * accidental brush rearranges the screen — so widgets are inert until you
- * explicitly unlock, exactly like the iOS home screen.
+ * Interaction model:
+ *   - Pages sit side by side in one horizontal track. A TWO-finger horizontal
+ *     drag moves the track under your fingers and snaps to a page on release,
+ *     tablet-style. One finger stays reserved for the widgets themselves.
+ *   - The top bar is hidden. Pull down from the top edge and it slides in OVER
+ *     the page; it leaves after 7 seconds, or the moment you tap the content
+ *     below it. While editing it stays pinned — you need its buttons.
+ *   - Edit mode is modal (the padlock): widgets are inert until unlocked, so a
+ *     passing brush can't rearrange the wall.
  */
 
 import { api, bus, connectStream, liveStates } from './core/api.js';
@@ -12,16 +18,23 @@ import { icon } from './core/icons.js';
 import {
   buildForm, close, confirmSheet, openSheet, openWidgetSettings, toast,
 } from './core/sheet.js';
-import { clear, debounce, el } from './core/util.js';
+import {
+  DEFAULT_THEME, PRESETS, apply as applyTheme, eventPalette, getTheme,
+  normalize as normalizeTheme, resolve as resolveTheme,
+} from './core/theme.js';
+import { clamp, clear, debounce, el } from './core/util.js';
 import { CATEGORIES, WIDGETS, widgetDef } from './widgets/index.js';
+
+const BAR_HIDE_MS = 7000;
+const EDGE_PX = 32;          // how close to the top a pull-down must start
 
 const state = {
   pages: [],
   settings: {},
   pageIndex: 0,
   editing: false,
-  grid: null,
-  instances: new Map(),   // widget id -> {destroy, refresh}
+  grids: new Map(),          // page id -> Grid
+  instances: new Map(),      // widget id -> {destroy, refresh}
 };
 
 const dom = {};
@@ -29,8 +42,13 @@ const dom = {};
 /* ------------------------------------------------------------------- boot */
 
 async function boot() {
+  applyTheme(DEFAULT_THEME);           // paint something sane before data loads
+
+  dom.topbar = document.getElementById('topbar');
   dom.tabs = document.getElementById('tabs');
   dom.stage = document.getElementById('stage');
+  dom.pager = document.getElementById('pager');
+  dom.dots = document.getElementById('dots');
   dom.editBtn = document.getElementById('editBtn');
   dom.addBtn = document.getElementById('addBtn');
   dom.settingsBtn = document.getElementById('settingsBtn');
@@ -46,15 +64,14 @@ async function boot() {
     dom.status.classList.toggle('bad', !ok);
     dom.status.title = ok ? 'Live' : 'Reconnecting…';
   });
-  // Another client (a phone) rearranged things — pick it up, unless we're the
-  // one editing, in which case our own in-flight layout wins.
   bus.on('layout_changed', () => { if (!state.editing) reload(); });
 
   await reload();
   connectStream();
   applyNightDim();
   setInterval(applyNightDim, 60000);
-  initSwipe();
+  initPager();
+  initTopBar();
 }
 
 async function reload() {
@@ -66,13 +83,19 @@ async function reload() {
     toast(`Could not load the dashboard: ${e.message}`, true);
     return;
   }
-  if (!state.pages.length) {
-    dom.stage.replaceChildren(el('p.empty-hint', { text: 'No pages yet' }));
-    return;
-  }
-  state.pageIndex = Math.min(state.pageIndex, state.pages.length - 1);
+  applySavedTheme();
+  state.pageIndex = clamp(state.pageIndex, 0, Math.max(0, state.pages.length - 1));
   renderTabs();
-  renderPage();
+  renderAllPages();
+}
+
+function applySavedTheme() {
+  try {
+    const raw = state.settings.theme;
+    applyTheme(raw ? { ...DEFAULT_THEME, ...JSON.parse(raw) } : DEFAULT_THEME);
+  } catch {
+    applyTheme(DEFAULT_THEME);
+  }
 }
 
 /* ------------------------------------------------------------------ pages */
@@ -83,90 +106,258 @@ function renderTabs() {
     dom.tabs.append(el('button.tab', {
       text: p.name,
       'aria-selected': String(i === state.pageIndex),
-      onclick: () => { state.pageIndex = i; renderTabs(); renderPage(); },
+      onclick: () => setPage(i, true),
     }));
+  });
+}
+
+function renderDots() {
+  clear(dom.dots);
+  if (state.pages.length < 2) return;
+  state.pages.forEach((_, i) => {
+    dom.dots.append(el('span.dot' + (i === state.pageIndex ? '.on' : '')));
   });
 }
 
 function teardownWidgets() {
   for (const inst of state.instances.values()) {
-    try { inst.destroy?.(); } catch { /* a broken widget must not block the rest */ }
+    try { inst.destroy?.(); } catch { /* one bad widget must not block the rest */ }
   }
   state.instances.clear();
+  state.grids.clear();
 }
 
-function renderPage() {
+/**
+ * Every page is mounted at once so a swipe reveals real content, not a
+ * skeleton. A handful of pages of widgets is well within budget; widgets that
+ * poll do so on timers measured in minutes.
+ */
+function renderAllPages() {
   teardownWidgets();
-  clear(dom.stage);
-  const page = state.pages[state.pageIndex];
-  if (!page) return;
-
-  const host = el('div.grid-host');
-  dom.stage.append(host);
+  clear(dom.pager);
 
   const saveLayout = debounce(async (layout) => {
     try { await api.saveLayout(layout); } catch (e) { toast(e.message, true); }
   }, 400);
 
-  state.grid = new Grid(host, page, {
-    onChange: saveLayout,
-    onEdit: w => editWidget(w),
-    onDelete: w => confirmSheet('Remove widget?',
-      `“${widgetDef(w.type)?.name || w.type}” will be removed from this page.`,
-      async () => {
-        try {
-          await api.deleteWidget(w.id);
-          state.instances.get(w.id)?.destroy?.();
-          state.instances.delete(w.id);
-          state.grid.remove(w.id);
-          page.widgets = page.widgets.filter(x => x.id !== w.id);
-        } catch (e) { toast(e.message, true); }
-      }),
-  });
-  state.grid.setEditing(state.editing);
+  for (const page of state.pages) {
+    const pageEl = el('div.page');
+    const host = el('div.grid-host');
+    pageEl.append(host);
+    dom.pager.append(pageEl);
 
-  for (const w of page.widgets) mountWidget(w);
+    const grid = new Grid(host, page, {
+      onChange: saveLayout,
+      onEdit: w => editWidget(w),
+      onDelete: w => confirmSheet('Remove widget?',
+        `“${widgetDef(w.type)?.name || w.type}” will be removed from this page.`,
+        async () => {
+          try {
+            await api.deleteWidget(w.id);
+            state.instances.get(w.id)?.destroy?.();
+            state.instances.delete(w.id);
+            grid.remove(w.id);
+            page.widgets = page.widgets.filter(x => x.id !== w.id);
+          } catch (e) { toast(e.message, true); }
+        }),
+    });
+    grid.setEditing(state.editing);
+    state.grids.set(page.id, grid);
+    for (const w of page.widgets) mountWidget(grid, w);
+  }
+
+  renderDots();
+  setPage(state.pageIndex, false);
 }
 
-function mountWidget(w) {
+function mountWidget(grid, w) {
   const def = widgetDef(w.type);
   const content = el('div.w-content');
-  state.grid.add(w, content);
-
+  grid.add(w, content);
   if (!def) {
     content.append(el('p.empty-hint', { text: `Unknown widget: ${w.type}` }));
     return;
   }
-  const ctx = { widget: w, settings: w.settings || {}, bus };
   try {
-    const inst = def.render(content, ctx) || {};
-    state.instances.set(w.id, inst);
+    state.instances.set(w.id, def.render(content, { widget: w, settings: w.settings || {}, bus }) || {});
   } catch (e) {
-    // One broken widget must not take the whole wall down.
     console.error(`widget ${w.type} failed`, e);
     content.append(el('p.empty-hint', { text: `${def.name} failed to load` }));
   }
 }
 
 function remountWidget(w) {
+  const grid = state.grids.get(w.page_id);
+  if (!grid) return;
   state.instances.get(w.id)?.destroy?.();
   state.instances.delete(w.id);
-  state.grid.remove(w.id);
-  mountWidget(w);
+  grid.remove(w.id);
+  mountWidget(grid, w);
+}
+
+function currentPage() {
+  return state.pages[state.pageIndex];
+}
+
+function currentGrid() {
+  const p = currentPage();
+  return p ? state.grids.get(p.id) : null;
+}
+
+function setPage(i, animate) {
+  state.pageIndex = clamp(i, 0, Math.max(0, state.pages.length - 1));
+  dom.pager.classList.toggle('animating', !!animate);
+  dom.pager.classList.remove('dragging');
+  dom.pager.style.transform = `translateX(${-state.pageIndex * 100}%)`;
+  renderTabs();
+  renderDots();
+}
+
+/* ------------------------------------------------- two-finger page swiping */
+
+function initPager() {
+  const pts = new Map();     // pointerId -> {x, y}
+  let drag = null;
+
+  const avgX = () => {
+    let s = 0;
+    for (const p of pts.values()) s += p.x;
+    return s / pts.size;
+  };
+
+  dom.stage.addEventListener('pointerdown', e => {
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // Two fingers anywhere on the stage picks the track up — like a tablet.
+    if (pts.size === 2 && !state.editing && !drag) {
+      drag = {
+        start: avgX(),
+        last: avgX(),
+        lastT: performance.now(),
+        v: 0,
+        base: -state.pageIndex * dom.stage.clientWidth,
+      };
+      dom.pager.classList.remove('animating');
+      dom.pager.classList.add('dragging');
+    }
+  }, true);
+
+  dom.stage.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (!drag || pts.size < 2) return;
+
+    const now = performance.now();
+    const a = avgX();
+    drag.v = (a - drag.last) / Math.max(1, now - drag.lastT);   // px per ms
+    drag.last = a;
+    drag.lastT = now;
+
+    let off = drag.base + (a - drag.start);
+    // Rubber-band past the ends rather than stopping dead.
+    const min = -(state.pages.length - 1) * dom.stage.clientWidth;
+    if (off > 0) off *= 0.30;
+    if (off < min) off = min + (off - min) * 0.30;
+    dom.pager.style.transform = `translateX(${off}px)`;
+  }, true);
+
+  const release = e => {
+    pts.delete(e.pointerId);
+    if (!drag || pts.size >= 2) return;
+
+    const w = dom.stage.clientWidth;
+    const moved = drag.last - drag.start;
+    const off = drag.base + moved;
+    // Nearest page wins; a decisive flick advances even on a short travel.
+    let idx = Math.round(-off / w);
+    if (idx === state.pageIndex && Math.abs(drag.v) > 0.35 && Math.abs(moved) > 24) {
+      idx += drag.v < 0 ? 1 : -1;
+    }
+    drag = null;
+    setPage(idx, true);
+  };
+  dom.stage.addEventListener('pointerup', release, true);
+  dom.stage.addEventListener('pointercancel', release, true);
+}
+
+/* --------------------------------------------------------- auto-hiding bar */
+
+function initTopBar() {
+  const bar = dom.topbar;
+  let hideTimer = null;
+  let pull = null;
+  const barH = () => bar.offsetHeight || 62;
+
+  const arm = () => {
+    clearTimeout(hideTimer);
+    if (!state.editing) hideTimer = setTimeout(hideBar, BAR_HIDE_MS);
+  };
+  window._showBar = showBar;   // toggleEdit needs it
+
+  function showBar() {
+    bar.classList.add('shown');
+    document.body.classList.add('bar-open');
+    arm();
+  }
+  function hideBar() {
+    if (state.editing) return;            // the bar carries the edit controls
+    clearTimeout(hideTimer);
+    bar.classList.remove('shown');
+    document.body.classList.remove('bar-open');
+  }
+  window._hideBarNow = hideBar;
+
+  // Any interaction with the bar itself buys another 7 seconds.
+  bar.addEventListener('pointerdown', arm);
+
+  dom.stage.addEventListener('pointerdown', e => {
+    if (bar.classList.contains('shown')) {
+      // A tap on the content below the header dismisses it.
+      if (!state.editing) hideBar();
+      return;
+    }
+    if (e.clientY <= EDGE_PX) {
+      pull = { id: e.pointerId, y0: e.clientY };
+      bar.classList.add('dragging');
+    }
+  }, true);
+
+  dom.stage.addEventListener('pointermove', e => {
+    if (!pull || e.pointerId !== pull.id) return;
+    // The bar rides the finger down, exactly like a notification shade.
+    const dy = Math.max(0, e.clientY - pull.y0);
+    bar.style.transform = `translateY(${Math.min(0, -barH() + dy)}px)`;
+  }, true);
+
+  const endPull = e => {
+    if (!pull || e.pointerId !== pull.id) return;
+    const dy = Math.max(0, e.clientY - pull.y0);
+    bar.classList.remove('dragging');
+    bar.style.transform = '';
+    if (dy > barH() * 0.45) showBar();
+    else { bar.classList.remove('shown'); document.body.classList.remove('bar-open'); }
+    pull = null;
+  };
+  dom.stage.addEventListener('pointerup', endPull, true);
+  dom.stage.addEventListener('pointercancel', endPull, true);
 }
 
 /* -------------------------------------------------------------- edit mode */
 
 function toggleEdit() {
   state.editing = !state.editing;
-  state.grid?.setEditing(state.editing);
+  for (const g of state.grids.values()) g.setEditing(state.editing);
   document.body.classList.toggle('editing', state.editing);
   clear(dom.editBtn);
   dom.editBtn.append(icon(state.editing ? 'unlock' : 'lock', 22));
   dom.editBtn.setAttribute('aria-pressed', String(state.editing));
   dom.addBtn.hidden = !state.editing;
   dom.pageBtn.hidden = !state.editing;
-  if (state.editing) toast('Edit mode — drag to move, corner to resize');
+  if (state.editing) {
+    window._showBar?.();                 // pinned while editing
+    toast('Edit mode — drag to move, corner to resize');
+  } else {
+    window._showBar?.();                 // re-arms the 7s timer
+  }
 }
 
 async function editWidget(w) {
@@ -182,7 +373,9 @@ async function editWidget(w) {
 }
 
 function openPalette() {
-  const page = state.pages[state.pageIndex];
+  const page = currentPage();
+  const grid = currentGrid();
+  if (!page || !grid) return;
   const body = el('div.palette');
   for (const cat of CATEGORIES) {
     body.append(el('h3.form-section', { text: cat }));
@@ -192,7 +385,7 @@ function openPalette() {
         onclick: async () => {
           close();
           const size = def.defaultSize || { w: 12, h: 10 };
-          const slot = state.grid.findSlot(size.w, size.h, def.minSize);
+          const slot = grid.findSlot(size.w, size.h, def.minSize);
           if (!slot) {
             toast('This page is full — free some space or add a new page', true);
             return;
@@ -206,7 +399,7 @@ function openPalette() {
               x: slot.x, y: slot.y, w: slot.w, h: slot.h, settings: {},
             });
             page.widgets.push(w);
-            mountWidget(w);
+            mountWidget(grid, w);
             if (!state.editing) toggleEdit();
           } catch (e) { toast(e.message, true); }
         },
@@ -218,7 +411,8 @@ function openPalette() {
 }
 
 function openPageManager() {
-  const page = state.pages[state.pageIndex];
+  const page = currentPage();
+  if (!page) return;
   const name = el('input.input', { type: 'text', value: page.name });
   const cols = el('input.input', { type: 'number', min: 8, max: 200, value: page.cols });
   const rows = el('input.input', { type: 'number', min: 8, max: 200, value: page.rows });
@@ -239,8 +433,7 @@ function openPageManager() {
         try {
           await api.createPage({ name: 'New page', position: state.pages.length });
           await reload();
-          state.pageIndex = state.pages.length - 1;
-          renderTabs(); renderPage();
+          setPage(state.pages.length - 1, true);
         } catch (e) { toast(e.message, true); }
       },
     }),
@@ -286,11 +479,8 @@ async function openSettings() {
   const panel = el('div.subpanel');
   body.append(tabs, panel);
 
-  const views = {
-    Devices: renderDevices,
-    Display: renderDisplay,
-  };
-  let active = 'Devices';
+  const views = { Theme: renderThemeTab, Devices: renderDevices, Display: renderDisplay };
+  let active = 'Theme';
   const paint = async () => {
     clear(tabs);
     Object.keys(views).forEach(k => tabs.append(el('button.subtab', {
@@ -301,7 +491,120 @@ async function openSettings() {
     panel.append(await views[active]());
   };
   await paint();
-  openSheet({ title: 'Settings', body, wide: true, actions: [{ label: 'Close', onClick: close }] });
+  openSheet({
+    title: 'Settings', body, wide: true,
+    actions: [{ label: 'Close', onClick: () => { close(); applySavedTheme(); } }],
+  });
+}
+
+/* The theme editor. Everything applies LIVE as you drag — the whole panel is
+   the preview — and only persists when you press Save. */
+async function renderThemeTab() {
+  let draft = getTheme();
+
+  const wrap = el('div');
+
+  // Presets: one tap to a known-good scheme, then tune from there.
+  const presetRow = el('div.theme-presets');
+  const paintPresets = () => {
+    clear(presetRow);
+    for (const p of PRESETS) {
+      const v = resolveTheme(p.theme);
+      const isCurrent = JSON.stringify(normalizeTheme(p.theme)) === JSON.stringify(draft);
+      presetRow.append(el('button.preset', {
+        'aria-pressed': String(isCurrent),
+        onclick: () => { draft = normalizeTheme(p.theme); applyTheme(draft); refresh(); },
+      }, [
+        el('div.preset-chips', {}, [
+          el('span.preset-chip', { style: { background: v['--bg'], borderColor: v['--line-strong'] } }),
+          el('span.preset-chip', { style: { background: v['--primary'] } }),
+          el('span.preset-chip', { style: { background: v['--secondary'] } }),
+          el('span.preset-chip', { style: { background: v['--tertiary'] } }),
+        ]),
+        el('span', { text: p.name }),
+      ]));
+    }
+  };
+
+  const ROLES = [
+    ['primary', 'Primary', 'Buttons, selection, today, toggles — everything you interact with'],
+    ['secondary', 'Secondary', 'Devices and scenes — anything about the home being on'],
+    ['tertiary', 'Tertiary', 'Reminders, precipitation, highlights — informational colour'],
+  ];
+  const DIALS = [
+    ['intensity', 'Colour intensity', 0, 100, 'Left is monochrome, right is vivid'],
+    ['brightness', 'Background brightness', 0, 100, 'Slide far right for a light theme'],
+    ['tint', 'Neutral tint', 0, 359, 'The undertone of the greys'],
+  ];
+
+  const controls = el('div');
+  const buildControls = () => {
+    clear(controls);
+    for (const [key, label, where] of ROLES) {
+      const sw = el('span.role-swatch');
+      const slider = el('input.hue-slider', { type: 'range', min: 0, max: 359, value: draft[key] });
+      const row = el('div.hue-row', {}, [sw, slider]);
+      const setSwatch = () => {
+        const v = resolveTheme(draft);
+        const c = v['--' + key];
+        sw.style.background = c;
+        slider.style.setProperty('--role-color', c);
+      };
+      slider.addEventListener('input', () => {
+        draft[key] = Number(slider.value);
+        applyTheme(draft);
+        setSwatch();
+        paintPresets();
+      });
+      setSwatch();
+      controls.append(el('div.field', {}, [
+        el('span.field-label', { text: label }),
+        row,
+        el('span.role-where', { text: where }),
+      ]));
+    }
+    for (const [key, label, min, max, help] of DIALS) {
+      const out = el('span.slider-value', { text: String(draft[key]) });
+      const slider = el('input.slider', { type: 'range', min, max, step: 1, value: draft[key] });
+      slider.addEventListener('input', () => {
+        draft[key] = Number(slider.value);
+        out.textContent = slider.value;
+        applyTheme(draft);
+        paintPresets();
+      });
+      controls.append(el('div.field', {}, [
+        el('span.field-label', { text: label }),
+        el('div.slider-row', {}, [slider, out]),
+        help ? el('span.field-help', { text: help }) : null,
+      ]));
+    }
+  };
+
+  const refresh = () => { paintPresets(); buildControls(); };
+  refresh();
+
+  wrap.append(
+    el('h3.form-section', { text: 'Presets' }),
+    presetRow,
+    el('h3.form-section', { text: 'Roles' }),
+    controls,
+    el('div.dev-actions', { style: { marginTop: '16px' } }, [
+      el('button.btn.btn-primary', {
+        text: 'Save theme',
+        onclick: async () => {
+          try {
+            state.settings = await api.saveSettings({ theme: JSON.stringify(draft) });
+            toast('Theme saved');
+          } catch (e) { toast(e.message, true); }
+        },
+      }),
+      el('button.btn', {
+        text: 'Reset to default',
+        onclick: () => { draft = { ...DEFAULT_THEME }; applyTheme(draft); refresh(); },
+      }),
+    ]),
+  );
+  return wrap;
 }
 
 async function renderDevices() {
@@ -358,7 +661,7 @@ function showDiscovered(found, kinds) {
   const body = el('div');
   if (!all.length) {
     body.append(el('p.sheet-note', {
-      text: 'Nothing found. Rokus answer only when powered; Samsung TVs stop responding entirely when off; Govee plugs have no LAN API at all and must be added with a cloud API key.',
+      text: 'Nothing found. Rokus answer only when powered; Samsung TVs stop responding entirely when off; Govee plugs have no LAN API and must be added with a cloud API key.',
     }));
   }
   all.forEach(d => body.append(el('div.dev-row', {}, [
@@ -434,9 +737,7 @@ async function editDevice(device, kinds) {
   actions.push({ label: 'Cancel', onClick: () => { close(); openSettings(); } });
   actions.push({
     label: 'Save', kind: 'primary', onClick: async () => {
-      const payload = {
-        name: name.value.trim(), kind, room: room.value.trim(), config: form.values,
-      };
+      const payload = { name: name.value.trim(), kind, room: room.value.trim(), config: form.values };
       if (!payload.name) return toast('Give the device a name', true);
       try {
         if (isNew) await api.createDevice(payload);
@@ -461,7 +762,7 @@ async function renderDisplay() {
     { key: 'night_level', label: 'Dim level (%)', type: 'slider', min: 10, max: 90,
       default: Number(s.night_level || 45) },
   ], {});
-  const wrap = el('div', {}, [
+  return el('div', {}, [
     node,
     el('button.btn.btn-primary', {
       text: 'Save display settings',
@@ -479,7 +780,6 @@ async function renderDisplay() {
       },
     }),
   ]);
-  return wrap;
 }
 
 /* ------------------------------------------------------------- night dim */
@@ -497,35 +797,9 @@ function applyNightDim() {
   const now = new Date();
   const cur = now.getHours() * 60 + now.getMinutes();
   const a = toMin(s.night_start || '22:00'), b = toMin(s.night_end || '07:00');
-  // The window normally wraps midnight, so "inside" flips depending on order.
   const inWindow = a <= b ? (cur >= a && cur < b) : (cur >= a || cur < b);
   document.documentElement.style.setProperty(
     '--dim', inWindow ? String(Number(s.night_level || 45) / 100) : '1');
-}
-
-/* ----------------------------------------------------------------- swipe */
-
-function initSwipe() {
-  let x0 = null, y0 = null, t0 = 0;
-  dom.stage.addEventListener('pointerdown', e => {
-    if (state.editing) return;                       // dragging widgets wins
-    if (e.target.closest('.w-content button, .w-content input, .tv-scroll, .todo-list')) return;
-    x0 = e.clientX; y0 = e.clientY; t0 = Date.now();
-  }, { passive: true });
-
-  dom.stage.addEventListener('pointerup', e => {
-    if (x0 === null) return;
-    const dx = e.clientX - x0, dy = e.clientY - y0, dt = Date.now() - t0;
-    x0 = null;
-    if (dt < 700 && Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.6) {
-      const next = state.pageIndex + (dx < 0 ? 1 : -1);
-      if (next >= 0 && next < state.pages.length) {
-        state.pageIndex = next;
-        renderTabs();
-        renderPage();
-      }
-    }
-  }, { passive: true });
 }
 
 document.addEventListener('DOMContentLoaded', boot);

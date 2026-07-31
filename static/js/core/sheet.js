@@ -11,7 +11,8 @@
 
 import { api } from './api.js';
 import { ICON_NAMES, icon } from './icons.js';
-import { EVENT_COLORS, clear, el } from './util.js';
+import { eventPalette, getTheme } from './theme.js';
+import { clear, el } from './util.js';
 
 let backdrop = null;
 
@@ -132,7 +133,8 @@ async function buildControl(f, values, onChange) {
     }
     case 'color': {
       const row = el('div.swatches');
-      const palette = f.options || EVENT_COLORS.map(c => ({ value: c.value, label: c.name }));
+      const palette = f.options ||
+        eventPalette(getTheme()).map(c => ({ value: c.value, label: c.name }));
       let current = val || palette[0].value;
       const paint = () => [...row.children].forEach(b =>
         b.setAttribute('aria-pressed', String(b.dataset.value === current)));

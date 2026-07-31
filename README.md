@@ -34,6 +34,38 @@ static/
 deploy/install.sh      packages, database, systemd units, X config — run as root
 ```
 
+## Interaction model
+
+- **Pages** sit side by side in one horizontal track. A **two-finger drag**
+  moves the track under your fingers and snaps on release, tablet-style —
+  rubber-banding past the ends, a flick advancing on velocity. One finger stays
+  reserved for the widgets. Page dots sit along the bottom edge.
+- **The top bar is hidden.** Pull down from the top edge and it slides in over
+  the page (a thin bar at the top is the only hint it exists). It leaves after
+  7 seconds, or the moment you tap the content below it. While editing it stays
+  pinned, since it carries the edit controls.
+
+## Theme
+
+The palette is generated from six numbers — three **role hues** plus three
+dials — so it's impossible to build an incoherent scheme:
+
+| | |
+|---|---|
+| **Primary** | interaction and selection: buttons, active tab, today, toggles |
+| **Secondary** | device/home state: an "on" tile's icon and dot, scene icons |
+| **Tertiary** | informational accents: reminders, precipitation |
+| Intensity | monochrome ↔ vivid (saturation of all three roles) |
+| Brightness | near-black ↔ light theme (flips polarity past ~62) |
+| Tint | the undertone of the greys |
+
+Settings → Theme: seven presets, then hue sliders per role. Everything applies
+**live** — the panel is its own preview — and persists on Save. Accent
+saturation/lightness are fixed at values tuned for the panel, so a hue slider
+can't produce something garish; event colours are six evenly-spaced hues derived
+from the same numbers, so a calendar never clashes with the chrome. Everything
+is emitted as CSS custom properties from `static/js/core/theme.js`.
+
 ## The grid
 
 Each page declares a cell grid (48 × 32 by default) and every widget stores

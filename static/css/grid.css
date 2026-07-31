@@ -102,13 +102,13 @@
 .w.dragging { opacity: .3; }
 
 .w-ghost {
-  border: 1px solid var(--accent);
+  border: 1px solid var(--primary);
   border-radius: var(--r-card);
-  background: rgba(100, 120, 208, .07);
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
   pointer-events: none;
   z-index: 4;
 }
 .w-ghost[data-bad="1"] {
   border-color: var(--danger);
-  background: rgba(196, 112, 125, .07);
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
 }

@@ -136,13 +136,7 @@ export function layoutColumns(evs) {
   return out;
 }
 
-/* Deliberately desaturated. Full-chroma hues on a panel that's lit all day in
-   a living room read as neon and are tiring to look at; these stay
-   distinguishable at a glance without shouting. Colour is only ever expressed
-   as a 2px rule, a dot or an icon — see widgets.css. */
-export const EVENT_COLORS = [
-  { name: 'blue', value: '#6c86c8' }, { name: 'green', value: '#7d9e6b' },
-  { name: 'purple', value: '#907fb4' }, { name: 'amber', value: '#c2914f' },
-  { name: 'rose', value: '#c07281' }, { name: 'teal', value: '#5b95a0' },
-];
-export const DEFAULT_COLOR = EVENT_COLORS[0].value;
+/* Event/scene colour swatches now come from the live theme — see
+   theme.js:eventPalette(). Widgets that render a stored colour set the `--c`
+   custom property only when the record has one; the CSS fallback
+   var(--c, var(--primary|--secondary)) covers the rest. */

@@ -55,6 +55,7 @@ def _feed_view(acct: dict) -> dict:
         "fetch_url": cfg.get("url", ""),
         "visible": bool(acct.get("visible", True)),
         "enabled": bool(acct.get("enabled", True)),
+        "exclude": cfg.get("exclude", ""),
         "last_sync": acct.get("last_sync"),
         "status": cfg.get("last_status", ""),
         "count": cfg.get("last_count"),
@@ -276,12 +277,16 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     raise ApiError(400, f"that URL fetched, but is not a usable calendar: {e}")
                 name = (b.get("name") or "").strip() or calname or "Calendar"
+                cfg0 = {"url": fetch_url, "source_url": raw_url,
+                        "exclude": (b.get("exclude") or "").strip()[:400]}
+                events, dropped = feeds.apply_exclude(events, cfg0)
+                cfg0["last_status"] = f"ok: {len(events)} events" + \
+                    (f" · {dropped} filtered" if dropped else "")
+                cfg0["last_count"] = len(events)
                 acct = store.create_account({
                     "provider": "ics", "display_name": name[:80],
                     "color": (b.get("color") or "")[:20],
-                    "token_json": {"url": fetch_url, "source_url": raw_url,
-                                   "last_status": f"ok: {len(events)} events",
-                                   "last_count": len(events)},
+                    "token_json": cfg0,
                 })
                 for ev in events:
                     ev["color"] = acct.get("color") or None
@@ -319,6 +324,7 @@ class Handler(BaseHTTPRequestHandler):
             if method == "PATCH":
                 b = self._body()
                 data = {}
+                needs_sync = False
                 if "name" in b:
                     data["display_name"] = str(b["name"])[:80]
                 if "color" in b:
@@ -326,15 +332,20 @@ class Handler(BaseHTTPRequestHandler):
                 for f in ("visible", "enabled"):
                     if f in b:
                         data[f] = bool(b[f])
+                cfg = dict(acct.get("token_json") or {})
                 if "url" in b and str(b["url"]).strip():
                     fetch_url, _ = feeds.normalize_url(str(b["url"]).strip())
-                    cfg = dict(acct.get("token_json") or {})
                     cfg["url"] = fetch_url
                     cfg["source_url"] = str(b["url"]).strip()
+                    needs_sync = True
+                if "exclude" in b:
+                    cfg["exclude"] = str(b["exclude"] or "").strip()[:400]
+                    needs_sync = True               # filter applies at import
+                if needs_sync:
                     data["token_json"] = cfg
-                    data["sync_token"] = None       # force a full refetch
+                    data["sync_token"] = None       # force a refetch past the ETag
                 acct = store.update_account(aid, data)
-                if "url" in b and str(b["url"]).strip():
+                if needs_sync:
                     feeds.sync_account(acct)
                     acct = store.get_account(aid)
                 # Visibility and colour change what every calendar shows.

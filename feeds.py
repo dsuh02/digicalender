@@ -46,6 +46,23 @@ def normalize_url(raw: str) -> tuple[str, str]:
     return url, ""
 
 
+def _exclude_terms(cfg: dict) -> list[str]:
+    return [t.strip().casefold()
+            for t in (cfg.get("exclude") or "").split(",") if t.strip()]
+
+
+def apply_exclude(events: list[dict], cfg: dict) -> tuple[list[dict], int]:
+    """Drop events whose TITLE contains any configured substring
+    (case-insensitive). Applied at import, so filtered events never reach the
+    database and every count the UI shows stays honest."""
+    terms = _exclude_terms(cfg)
+    if not terms:
+        return events, 0
+    kept = [ev for ev in events
+            if not any(t in ev["title"].casefold() for t in terms)]
+    return kept, len(events) - len(kept)
+
+
 def sync_account(account: dict) -> dict:
     """Fetch + parse + replace one feed's events. Returns a status dict and
     persists last_status/last_count on the account either way."""
@@ -68,11 +85,14 @@ def sync_account(account: dict) -> dict:
     except Exception as e:
         return _finish(account, cfg, ok=False, message=f"could not parse the feed: {e}")
 
-    # Re-read the account AFTER the network fetch: a recolour landing while a
-    # slow feed was downloading used to be silently reverted when the import
-    # stamped every event with the colour captured before the fetch began.
+    # Re-read the account AFTER the network fetch: a recolour or filter change
+    # landing while a slow feed was downloading used to be silently reverted
+    # when the import stamped values captured before the fetch began.
     fresh = store.get_account(account["id"]) or account
+    cfg = dict(fresh.get("token_json") or cfg)
     color = fresh.get("color") or None
+
+    events, dropped = apply_exclude(events, cfg)
     for ev in events:
         ev["provider"] = "ics"
         ev["account_id"] = account["id"]
@@ -82,6 +102,8 @@ def sync_account(account: dict) -> dict:
     store.update_account(account["id"], {"sync_token": new_etag,
                                          "last_sync": store.now_iso()})
     msg = f"{n} events"
+    if dropped:
+        msg += f" · {dropped} filtered"
     if warnings:
         msg += f" · {len(warnings)} items skipped"
     return _finish(account, cfg, ok=True, message=msg, count=n,

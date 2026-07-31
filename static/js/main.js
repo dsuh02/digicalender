@@ -739,8 +739,12 @@ async function editFeed(feed, feedCount = 0) {
       help: isNew ? '' : 'Leave unchanged unless the address moved' },
     { key: 'name', label: 'Name', type: 'text', placeholder: 'Work, Family…',
       help: 'Optional — the feed’s own name is used when blank' },
+    { key: 'exclude', label: 'Hide events containing', type: 'text',
+      placeholder: 'canceled, tentative',
+      help: 'Comma-separated, case-insensitive, matched against event titles' },
     { key: 'color', label: 'Colour', type: 'color' },
-  ], feed ? { url: feed.url, name: feed.name, color: feed.color || suggested }
+  ], feed ? { url: feed.url, name: feed.name, exclude: feed.exclude || '',
+              color: feed.color || suggested }
           : { color: suggested });
 
   let busy = false;
@@ -767,10 +771,14 @@ async function editFeed(feed, feedCount = 0) {
         if (isNew) {
           if (!String(values.url || '').trim()) { toast('Paste a calendar address first', true); busy = false; return; }
           toast('Fetching the calendar…');
-          const r = await api.createFeed({ url: values.url, name: values.name, color: values.color });
+          const r = await api.createFeed({
+            url: values.url, name: values.name, color: values.color,
+            exclude: values.exclude || '',
+          });
           toast(`Imported ${r.imported} events${r.warnings ? ` (${r.warnings} skipped)` : ''}`);
         } else {
           const patch = { name: values.name, color: values.color };
+          if ((values.exclude || '') !== (feed.exclude || '')) patch.exclude = values.exclude || '';
           if (String(values.url || '').trim() && values.url !== feed.url) patch.url = values.url;
           await api.updateFeed(feed.id, patch);
           toast('Saved');

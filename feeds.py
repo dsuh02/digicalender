@@ -68,10 +68,15 @@ def sync_account(account: dict) -> dict:
     except Exception as e:
         return _finish(account, cfg, ok=False, message=f"could not parse the feed: {e}")
 
+    # Re-read the account AFTER the network fetch: a recolour landing while a
+    # slow feed was downloading used to be silently reverted when the import
+    # stamped every event with the colour captured before the fetch began.
+    fresh = store.get_account(account["id"]) or account
+    color = fresh.get("color") or None
     for ev in events:
         ev["provider"] = "ics"
         ev["account_id"] = account["id"]
-        ev["color"] = account.get("color") or None
+        ev["color"] = color
 
     n = store.replace_feed_events(account["id"], events)
     store.update_account(account["id"], {"sync_token": new_etag,

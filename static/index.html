@@ -54,12 +54,15 @@
        browser can never claim a pull-down as a scroll. Taps are forwarded. -->
   <div class="edge-catch" id="edgeCatch"></div>
 
-  <!-- Present only while idle-dimmed: swallows the waking touch so tapping a
-       dark screen never presses whatever happens to be underneath. -->
-  <div class="wake-catch" id="wakeCatch" hidden></div>
-
   <div class="dots" id="dots" aria-hidden="true"></div>
 </div>
+
+<!-- OUTSIDE #app on purpose: #app's brightness filter creates a stacking
+     context, so anything appended to <body> (sheets, toasts) would stack
+     above an overlay living inside it, whatever its z-index. Out here its
+     z-index competes in the root context and wins over everything —
+     tapping a dark screen wakes it, even with a sheet left open. -->
+<div class="wake-catch" id="wakeCatch" hidden></div>
 
 <script type="module" src="/js/main.js"></script>
 </body>

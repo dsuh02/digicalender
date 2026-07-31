@@ -287,11 +287,16 @@ function initTopBar() {
   let pull = null;
   const barH = () => bar.offsetHeight || 62;
 
+  // Edit mode does NOT pin the bar: it overlays the page, so pinning it hides
+  // exactly the top-row widgets you unlocked to edit. Edit state and bar
+  // visibility are independent — the lock button is a pure toggle, and the bar
+  // hides on the same timer/tap rules whether you're editing or not. Pull it
+  // down again whenever you need its buttons.
   const arm = () => {
     clearTimeout(hideTimer);
-    if (!state.editing) hideTimer = setTimeout(hideBar, BAR_HIDE_MS);
+    hideTimer = setTimeout(hideBar, BAR_HIDE_MS);
   };
-  window._showBar = showBar;   // toggleEdit needs it
+  window._showBar = showBar;   // toggleEdit re-arms through this
 
   function showBar() {
     bar.classList.add('shown');
@@ -299,7 +304,6 @@ function initTopBar() {
     arm();
   }
   function hideBar() {
-    if (state.editing) return;            // the bar carries the edit controls
     clearTimeout(hideTimer);
     bar.classList.remove('shown');
     document.body.classList.remove('bar-open');
@@ -312,10 +316,13 @@ function initTopBar() {
   dom.stage.addEventListener('pointerdown', e => {
     if (bar.classList.contains('shown')) {
       // A tap on the content below the header dismisses it.
-      if (!state.editing) hideBar();
+      hideBar();
       return;
     }
-    if (e.clientY <= EDGE_PX) {
+    // In edit mode a drag that starts on a widget's grip/chrome near the top
+    // is a widget drag, not a request for the bar.
+    if (e.clientY <= EDGE_PX &&
+        !e.target.closest('.w-grip, .w-chrome, .w-resize')) {
       pull = { id: e.pointerId, y0: e.clientY };
       bar.classList.add('dragging');
     }
@@ -352,11 +359,9 @@ function toggleEdit() {
   dom.editBtn.setAttribute('aria-pressed', String(state.editing));
   dom.addBtn.hidden = !state.editing;
   dom.pageBtn.hidden = !state.editing;
+  window._showBar?.();                   // keep the bar up briefly, timer running
   if (state.editing) {
-    window._showBar?.();                 // pinned while editing
-    toast('Edit mode — drag to move, corner to resize');
-  } else {
-    window._showBar?.();                 // re-arms the 7s timer
+    toast('Edit mode — drag to move, resize from the corner. Pull down for the bar.');
   }
 }
 

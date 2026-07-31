@@ -61,21 +61,39 @@ function runShow(img, imageIds, intervalMs) {
 
 /* ------------------------------------------------------------- screensaver */
 
-let saver = null;   // {node, show, timer}
+let saver = null;     // {node, show, timer}
+let starting = false; // guards the async gap below
 
 export function screensaverActive() {
-  return !!saver;
+  return !!saver || starting;
 }
 
 export function stopScreensaver() {
-  if (!saver) return;
-  saver.show.stop();
-  clearTimeout(saver.timer);
-  saver.node.remove();
-  saver = null;
+  if (saver) {
+    saver.show.stop();
+    clearTimeout(saver.timer);
+    saver.node.remove();
+    saver = null;
+  }
+  // Belt: sweep strays. Before the reentrancy guard existed, two open calls
+  // could interleave through the await below and stack two fullscreen nodes —
+  // exiting then only removed the top one and the panel looked stuck.
+  document.querySelectorAll('.screensaver').forEach(n => n.remove());
 }
 
 export async function startScreensaver(galleryId, { interval = 20, fit = 'contain' } = {}) {
+  // The image-list fetch is an async gap; without this, a double tap opens
+  // two stacked screensavers because neither call sees the other's `saver`.
+  if (starting) return;
+  starting = true;
+  try {
+    await startScreensaverInner(galleryId, { interval, fit });
+  } finally {
+    starting = false;
+  }
+}
+
+async function startScreensaverInner(galleryId, { interval, fit }) {
   stopScreensaver();
   let images = [];
   try { images = await api.galleryImages(galleryId); } catch { images = []; }
@@ -88,12 +106,14 @@ export async function startScreensaver(galleryId, { interval = 20, fit = 'contai
   const node = el('div.screensaver', { id: 'screensaver' }, [img]);
 
   // Any touch ends the show. Swallow it — ending a screensaver is not a
-  // command to whatever sat underneath the finger.
+  // command to whatever sat underneath the finger. Exit on click as well as
+  // pointerdown: if something upstream ever consumes the down, the click
+  // still lands here and idempotently closes.
   for (const t of ['pointerdown', 'pointerup', 'click']) {
     node.addEventListener(t, e => {
       e.stopPropagation();
       e.preventDefault();
-      if (t === 'pointerdown') stopScreensaver();
+      if (t !== 'pointerup') stopScreensaver();
     });
   }
 

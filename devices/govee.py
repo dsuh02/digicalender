@@ -184,17 +184,27 @@ class GoveeCloudAdapter(DeviceAdapter):
     capabilities = (CAP_POWER, CAP_TOGGLE, CAP_BRIGHTNESS, CAP_COLOR)
     config_fields = (
         {"name": "api_key", "label": "Govee API key", "type": "password",
-         "help": "Govee Home app > Profile > About Us > Apply for API Key"},
+         "help": "Leave blank to use the shared key from Settings > Devices"},
         {"name": "device", "label": "Device MAC", "type": "text",
          "help": "The colon-separated id from /v1/devices, e.g. AB:CD:...:12"},
         {"name": "model", "label": "Model", "type": "text",
          "help": "e.g. H5080 for a smart plug"},
     )
 
-    def _req(self, path: str, method: str = "GET", body: dict | None = None):
+    def _key(self) -> str:
+        """Per-device key wins; otherwise the shared one pasted once in
+        Settings — two plugs should not mean pasting the same key twice."""
         key = (self.config.get("api_key") or "").strip()
+        if key:
+            return key
+        import store                       # local: keeps devices/ import-light
+        return (store.get_setting("govee_api_key") or "").strip()
+
+    def _req(self, path: str, method: str = "GET", body: dict | None = None):
+        key = self._key()
         if not key:
-            return None, "no API key configured"
+            return None, ("no Govee API key — paste one in Settings > Devices "
+                          "(Govee Home app > Profile > About Us > Apply for API Key)")
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(
             CLOUD_BASE + path, data=data, method=method,

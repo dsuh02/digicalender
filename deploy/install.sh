@@ -93,7 +93,9 @@ Environment=HOME=/home/$APP_USER
 Environment=XDG_RUNTIME_DIR=/run/user/$USER_UID
 Environment=DIGICALENDER_URL=http://localhost:$APP_PORT
 WorkingDirectory=$APP_DIR
-ExecStart=/usr/bin/xinit $APP_DIR/kiosk.sh -- :0 vt1 -nolisten tcp
+# -nocursor: a touch panel must never draw an arrow. Server-level beats CSS
+# cursor tricks — nothing (Chromium included) can bring it back.
+ExecStart=/usr/bin/xinit $APP_DIR/kiosk.sh -- :0 vt1 -nolisten tcp -nocursor
 Restart=always
 RestartSec=5
 

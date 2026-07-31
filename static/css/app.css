@@ -135,6 +135,27 @@ body.bar-open .edge-catch { display: none; }
 }
 .wake-catch[hidden] { display: none; }
 
+/* Touch feedback: a faint tinted ring that rides the finger, plus a one-shot
+   pulse on contact. Body-level (outside the dim filter) so the wake tap on a
+   dark screen still visibly registers. Never interactive. */
+.touch-dot, .touch-pulse {
+  position: fixed;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: color-mix(in srgb, var(--primary) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 32%, transparent);
+  pointer-events: none;
+  z-index: 90;
+}
+.touch-dot { transition: opacity .18s ease; }
+.touch-dot.lifting { opacity: 0; }
+.touch-pulse { animation: touch-pulse .45s ease-out forwards; }
+@keyframes touch-pulse {
+  from { opacity: .7; scale: .5; }
+  to   { opacity: 0; scale: 1.9; }
+}
+
 /* The only hint that the bar exists. Fades out whenever the bar is open. */
 .reveal-hint {
   position: absolute; top: 7px; left: 50%;

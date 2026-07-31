@@ -16,6 +16,7 @@ import mimetypes
 import os
 import queue
 import re
+import subprocess
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -760,6 +761,29 @@ class Handler(BaseHTTPRequestHandler):
             if data is None:
                 raise ApiError(502, err)
             return self._json(200, {"weather": data, "notice": err})
+
+        # ---- display power (DPMS on the panel's X server)
+        if path == "/api/display" and method == "POST":
+            want_on = bool(self._body().get("on", True))
+            x_display = os.environ.get("DIGICALENDER_X_DISPLAY", ":0")
+            try:
+                # `force` works even with DPMS timers disabled (kiosk.sh turns
+                # them off so nothing sleeps the panel behind our back);
+                # verified on the mini PC + this panel. Any input wakes X too —
+                # this endpoint is the deliberate path.
+                r = subprocess.run(
+                    ["xset", "-display", x_display, "dpms", "force",
+                     "on" if want_on else "off"],
+                    capture_output=True, text=True, timeout=5)
+                if r.returncode != 0:
+                    return self._json(502, {"ok": False,
+                                            "error": (r.stderr or "xset failed").strip()})
+            except FileNotFoundError:
+                return self._json(502, {"ok": False,
+                                        "error": "xset is not installed on this host"})
+            except subprocess.TimeoutExpired:
+                return self._json(502, {"ok": False, "error": "xset timed out"})
+            return self._json(200, {"ok": True, "on": want_on})
 
         # ---- settings
         if path == "/api/settings":

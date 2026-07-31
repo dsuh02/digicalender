@@ -80,6 +80,8 @@ export const api = {
   syncFeed: id => req(`/api/feeds/${id}/sync`, { method: 'POST' }),
   syncFeeds: () => req('/api/feeds/sync', { method: 'POST' }).then(r => r.results),
 
+  display: on => req('/api/display', { method: 'POST', body: JSON.stringify({ on }) }),
+
   weather: (lat, lon, units = 'imperial', days = 5) =>
     req(`/api/weather?lat=${lat}&lon=${lon}&units=${units}&days=${days}`),
 

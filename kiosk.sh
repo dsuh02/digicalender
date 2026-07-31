@@ -10,8 +10,8 @@ xset s off
 xset s noblank
 xset -dpms
 
-# No pointer on a touch panel — hide it immediately and keep it hidden.
-unclutter -idle 0 -root &
+# The X server itself runs -nocursor (see the systemd unit), so there is no
+# pointer to hide — unclutter is no longer started.
 
 # Minimal WM. Chromium is happier with something owning the root window,
 # and it makes the kiosk window get focus reliably.

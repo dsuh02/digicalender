@@ -74,6 +74,7 @@ async function boot() {
   initPager();
   initTopBar();
   initIdleDim();
+  initTouchFeedback();
 }
 
 async function reload() {
@@ -803,6 +804,31 @@ async function renderDevices() {
   };
   paint();
 
+  // Shared Govee key: pasted once, used by every govee_cloud device that has
+  // no key of its own, and by Scan to list the account's devices.
+  const keyInput = el('input.input', {
+    type: 'password', placeholder: 'Govee API key',
+    value: state.settings.govee_api_key || '',
+  });
+  const keyRow = el('div.field', {}, [
+    el('span.field-label', { text: 'Govee API key (shared)' }),
+    el('div.dev-actions', {}, [
+      keyInput,
+      el('button.btn', {
+        text: 'Save key', onclick: async () => {
+          try {
+            state.settings = await api.saveSettings({ govee_api_key: keyInput.value.trim() });
+            toast(keyInput.value.trim() ? 'Key saved — Scan will now list your Govee account'
+                                        : 'Key cleared');
+          } catch (e) { toast(e.message, true); }
+        },
+      }),
+    ]),
+    el('span.field-help', {
+      text: 'Govee Home app > Profile > About Us > Apply for API Key (arrives by email). Needed for smart plugs — they have no local control.',
+    }),
+  ]);
+
   wrap.append(
     el('div.dev-actions', {}, [
       el('button.btn.btn-primary', { text: '+ Add device', onclick: () => editDevice(null, kinds) }),
@@ -819,6 +845,7 @@ async function renderDevices() {
       }),
     ]),
     list,
+    keyRow,
   );
   return wrap;
 }
@@ -832,26 +859,40 @@ function showDiscovered(found, kinds) {
       text: 'Nothing found. Rokus answer only when powered; Samsung TVs stop responding entirely when off; Govee plugs have no LAN API and must be added with a cloud API key.',
     }));
   }
-  all.forEach(d => body.append(el('div.dev-row', {}, [
-    el('div.dev-main', {}, [
-      el('div.dev-name', { text: d.name }),
-      el('div.dev-meta', { text: `${d.kind}${d.ip ? ' · ' + d.ip : ''}${d.model ? ' · ' + d.model : ''}` }),
-    ]),
-    el('button.btn.btn-small.btn-primary', {
-      text: 'Add', onclick: async (e) => {
-        e.currentTarget.disabled = true;
-        const config = {};
-        if (d.ip) config.ip = d.ip;
-        if (d.mac) config.mac = d.mac;
-        if (d.sku) config.sku = d.sku;
-        if (d.is_tv) config.is_tv = true;
-        try {
-          await api.createDevice({ name: d.name, kind: d.kind, config });
-          toast(`${d.name} added`);
-        } catch (err) { toast(err.message, true); }
-      },
-    }),
-  ])));
+  all.forEach(d => {
+    // A cloud-listing failure is information, not an addable device.
+    if (d.error) {
+      body.append(el('p.sheet-note.warn', { text: d.error }));
+      return;
+    }
+    const bits = [d.kind, d.ip, d.model,
+                  d.device && !d.model ? d.device : null].filter(Boolean).join(' · ');
+    body.append(el('div.dev-row', {}, [
+      el('div.dev-main', {}, [
+        el('div.dev-name', { text: d.name }),
+        el('div.dev-meta', { text: bits }),
+        d.needs_key ? el('div.dev-meta', {
+          text: 'On the network, but cloud-only — save a Govee API key and rescan to control it',
+        }) : null,
+      ]),
+      el('button.btn.btn-small.btn-primary', {
+        text: 'Add', onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          const config = {};
+          if (d.ip) config.ip = d.ip;
+          if (d.mac) config.mac = d.mac;
+          if (d.sku) config.sku = d.sku;
+          if (d.is_tv) config.is_tv = true;
+          if (d.device) config.device = d.device;   // govee cloud id (MAC form)
+          if (d.model) config.model = d.model;
+          try {
+            await api.createDevice({ name: d.name, kind: d.kind, config });
+            toast(`${d.name} added`);
+          } catch (err) { toast(err.message, true); }
+        },
+      }),
+    ]));
+  });
   openSheet({ title: 'Discovered devices', body, wide: true,
               actions: [{ label: 'Done', onClick: () => { close(); openSettings(); } }] });
 }
@@ -935,6 +976,15 @@ async function renderDisplay() {
       min: 5, max: 480, default: Number(s.idle_stage2_min || 60) },
     { key: 'idle_stage2_level', label: 'Deep-dim to (%)', type: 'slider',
       min: 0, max: 20, default: Number(s.idle_stage2_level ?? 1) },
+    { key: 'idle_display_sleep', label: 'Then sleep the display', type: 'toggle',
+      default: (s.idle_display_sleep ?? 'true') !== 'false',
+      help: 'Real backlight-off (DPMS) — the panel is black, and a touch wakes it' },
+    { key: 'idle_stage3_min', label: 'Sleep after (minutes)', type: 'slider',
+      min: 10, max: 720, default: Number(s.idle_stage3_min || 120) },
+    { section: 'Touch' },
+    { key: 'touch_ripples', label: 'Show touch circles', type: 'toggle',
+      default: (s.touch_ripples ?? 'true') !== 'false',
+      help: 'Faint tinted rings under fingers; the panel never shows a cursor' },
     { section: 'Night schedule' },
     { key: 'night_dim', label: 'Dim overnight', type: 'toggle',
       default: s.night_dim === 'true', help: 'Softens the panel so it is not a lamp at 3am' },
@@ -958,6 +1008,9 @@ async function renderDisplay() {
             idle_stage1_level: String(values.idle_stage1_level ?? 8),
             idle_stage2_min: String(values.idle_stage2_min ?? 60),
             idle_stage2_level: String(values.idle_stage2_level ?? 1),
+            idle_display_sleep: String(!!values.idle_display_sleep),
+            idle_stage3_min: String(values.idle_stage3_min ?? 120),
+            touch_ripples: String(!!values.touch_ripples),
             night_dim: String(!!values.night_dim),
             night_start: values.night_start || '22:00',
             night_end: values.night_end || '07:00',
@@ -1014,7 +1067,19 @@ function idleCfg() {
     l1: Number(s.idle_stage1_level ?? 8) / 100,
     m2: Number(s.idle_stage2_min || 60),
     l2: Number(s.idle_stage2_level ?? 1) / 100,
+    sleep: (s.idle_display_sleep ?? 'true') !== 'false',
+    m3: Number(s.idle_stage3_min || 120),
   };
+}
+
+/* Stage 3 is real hardware sleep (DPMS), not CSS: the backlight goes off.
+   Fired once per idle period; any touch wakes X natively AND we force it back
+   on explicitly, because a wake that depends on one mechanism will one day
+   find its exception. */
+async function setDisplayPower(on) {
+  if (idle.screenOff === !on) return;
+  idle.screenOff = !on;
+  try { await api.display(on); } catch { /* not fatal — dimming still holds */ }
 }
 
 function setIdleLevel(v) {
@@ -1027,15 +1092,17 @@ function setIdleLevel(v) {
 
 function tickIdle() {
   const c = idleCfg();
-  if (!c.on) return setIdleLevel(1);
+  if (!c.on) { setDisplayPower(true); return setIdleLevel(1); }
   const mins = (Date.now() - idle.last) / 60000;
   setIdleLevel(mins >= c.m2 ? c.l2 : mins >= c.m1 ? c.l1 : 1);
+  if (c.sleep && mins >= c.m3) setDisplayPower(false);
 }
 
 function initIdleDim() {
   const wake = document.getElementById('wakeCatch');
   const mark = () => {
     idle.last = Date.now();
+    if (idle.screenOff) setDisplayPower(true);
     if (idle.level !== 1) setIdleLevel(1);
   };
   // Any touch or key anywhere is activity. Capture phase, so this runs before
@@ -1048,6 +1115,52 @@ function initIdleDim() {
   }
   setInterval(tickIdle, 10000);
   window._idle = { state: idle, tick: tickIdle };    // reachable for testing
+}
+
+/* ---------------------------------------------------------- touch feedback */
+
+/* Faint tinted circles under fingers. Touch pointers only — a mouse already
+   shows where it is, and the X server runs -nocursor so the panel never draws
+   an arrow. Lives outside #app so the ring stays visible on a dimmed screen,
+   confirming the wake tap registered. */
+function initTouchFeedback() {
+  const dots = new Map();   // pointerId -> element
+
+  const allowed = () => (state.settings.touch_ripples ?? 'true') !== 'false';
+
+  document.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch' || !allowed()) return;
+    const pulse = el('div.touch-pulse', {
+      style: { left: e.clientX + 'px', top: e.clientY + 'px' },
+    });
+    pulse.addEventListener('animationend', () => pulse.remove());
+    document.body.append(pulse);
+
+    const dot = el('div.touch-dot', {
+      style: { left: e.clientX + 'px', top: e.clientY + 'px' },
+    });
+    document.body.append(dot);
+    dots.set(e.pointerId, dot);
+  }, true);
+
+  document.addEventListener('pointermove', e => {
+    const dot = dots.get(e.pointerId);
+    if (dot) {
+      dot.style.left = e.clientX + 'px';
+      dot.style.top = e.clientY + 'px';
+    }
+  }, true);
+
+  const lift = e => {
+    const dot = dots.get(e.pointerId);
+    if (dot) {
+      dots.delete(e.pointerId);
+      dot.classList.add('lifting');
+      setTimeout(() => dot.remove(), 200);
+    }
+  };
+  document.addEventListener('pointerup', lift, true);
+  document.addEventListener('pointercancel', lift, true);
 }
 
 document.addEventListener('DOMContentLoaded', boot);

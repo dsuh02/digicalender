@@ -1,11 +1,16 @@
 """
 Network discovery — find devices instead of making you type IP addresses.
 
-Three probes, run concurrently:
-  SSDP        M-SEARCH for `roku:ecp`, then GET each responder's device-info.
-  Govee LAN   multicast scan (lights only — plugs have no LAN listener).
-  Samsung     probe :8001/api/v2/ across a subnet sweep, since Samsung's SSDP
-              advertisement is unreliable and often absent when the TV is idle.
+Probes, run concurrently:
+  SSDP         M-SEARCH for `roku:ecp`, then GET each responder's device-info.
+  Govee LAN    multicast scan (lights with LAN Control on — plugs never answer).
+  Govee cloud  account listing when a shared API key is saved — the only way
+               plugs are controllable, and it returns device+model ready to add.
+  Samsung      probe :8001/api/v2/ across a subnet sweep, since Samsung's SSDP
+               advertisement is unreliable and often absent when the TV is idle.
+  Govee ARP    after the sweep has populated the neighbour table, any MAC with
+               Govee's OUI (98:17:3C) is reported as present — so cloud-only
+               devices are still *found*, with a pointer at what they need.
 
 Everything is best-effort and time-boxed. Discovery on a wall panel must never
 hang the UI, so each probe has its own deadline and failures return empty.
@@ -21,9 +26,10 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 
-from .govee import lan_discover
+from .govee import GoveeCloudAdapter, lan_discover
 
 SSDP_ADDR = ("239.255.255.250", 1900)
+GOVEE_OUI = "98:17:3c"
 
 
 def _local_subnet() -> ipaddress.IPv4Network | None:
@@ -126,17 +132,96 @@ def discover_samsung(timeout: float = 6.0) -> list[dict]:
     return found
 
 
+def _sweep_arp(timeout: float = 4.0) -> None:
+    """Touch every host on the /24 so the kernel's neighbour table fills up.
+    A connect to the discard port is enough — we want the ARP exchange, not an
+    answer."""
+    net = _local_subnet()
+    if net is None:
+        return
+
+    def poke(host: str):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.3)
+            s.connect_ex((host, 9))
+            s.close()
+        except OSError:
+            pass
+
+    with ThreadPoolExecutor(max_workers=64) as pool:
+        list(pool.map(poke, [str(h) for h in net.hosts()], timeout=timeout))
+
+
+def _neighbour_macs() -> list[tuple[str, str]]:
+    """(ip, mac) pairs from /proc/net/arp — Linux only, which is where this runs."""
+    out = []
+    try:
+        with open("/proc/net/arp") as fh:
+            next(fh, None)
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 4 and parts[3] != "00:00:00:00:00:00":
+                    out.append((parts[0], parts[3].lower()))
+    except OSError:
+        pass
+    return out
+
+
+def discover_govee_cloud() -> list[dict]:
+    """Everything on the Govee account, when a shared API key is saved. This is
+    the path that makes plugs one-tap: the cloud returns device id AND model."""
+    import store
+    key = (store.get_setting("govee_api_key") or "").strip()
+    if not key:
+        return []
+    adapter = GoveeCloudAdapter({"config": {"api_key": key}})
+    devices, err = adapter.cloud_devices()
+    if err:
+        return [{"kind": "govee_cloud", "name": f"Govee cloud error: {err}",
+                 "error": err}]
+    return devices
+
+
+def discover_govee_presence(exclude_macs: set[str]) -> list[dict]:
+    """Govee hardware seen on the LAN by OUI. Run AFTER the subnet sweep so the
+    neighbour table is warm. These entries are informational when the device is
+    cloud-only — but 'found' is the honest word: it is here, on this network."""
+    found = []
+    for ip, mac in _neighbour_macs():
+        if mac.startswith(GOVEE_OUI) and mac.upper() not in exclude_macs:
+            found.append({
+                "kind": "govee_cloud",
+                "name": f"Govee device {mac.upper()[-8:]}",
+                "ip": ip,
+                "device": mac.upper(),
+                "needs_key": True,
+            })
+    return found
+
+
 def discover_all(include_samsung: bool = True) -> dict:
     """Every probe at once. Slowest single probe sets the wall-clock, not the sum."""
-    results: dict[str, list] = {"roku": [], "govee_lan": [], "samsung_tv": []}
-    jobs = {"roku": discover_roku, "govee_lan": lan_discover}
+    results: dict[str, list] = {"roku": [], "govee_lan": [], "govee_cloud": [],
+                                "samsung_tv": []}
+    jobs = {"roku": discover_roku, "govee_lan": lan_discover,
+            "govee_cloud": discover_govee_cloud}
     if include_samsung:
         jobs["samsung_tv"] = discover_samsung
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    else:
+        jobs["_arp"] = _sweep_arp          # samsung's sweep normally does this
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {k: pool.submit(fn) for k, fn in jobs.items()}
         for k, fut in futures.items():
             try:
-                results[k] = fut.result(timeout=20)
+                r = fut.result(timeout=25)
+                if k in results:
+                    results[k] = r
             except Exception:
-                results[k] = []
+                pass
+
+    # Cloud entries carry the model and win; ARP fills in whatever the cloud
+    # doesn't know about (no key yet, or a device on someone else's account).
+    known = {str(d.get("device", "")).upper() for d in results["govee_cloud"]}
+    results["govee_cloud"] += discover_govee_presence(known)
     return results

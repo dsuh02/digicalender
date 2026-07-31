@@ -542,6 +542,74 @@ button.src-dot-btn:active { background-color: var(--surface-3); background-clip:
 .action-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 8px; align-items: center; }
 .action-num { color: var(--text-3); width: 18px; font-size: 13px; font-variant-numeric: tabular-nums; }
 
+/* -------------------------------------------------------------- galleries */
+
+.gallery-box {
+  flex: 1; min-height: 0;
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+  display: grid; place-items: center;
+  cursor: pointer;
+}
+.gallery-img, .ss-img {
+  width: 100%; height: 100%;
+  display: block;
+  opacity: 1;
+  transition: opacity 1.8s ease;   /* the fade-to-black; ground is pure black */
+}
+
+/* Fullscreen screensaver: above everything except the wake overlay. */
+.screensaver {
+  position: fixed; inset: 0;
+  background: #000;
+  z-index: 96;
+  touch-action: none;
+  cursor: none;
+}
+
+.gset-cover {
+  width: 52px; height: 40px; flex: none;
+  object-fit: cover; border-radius: 6px;
+  border: 1px solid var(--line);
+}
+.gset-cover-empty { display: grid; place-items: center; color: var(--text-3); background: var(--bg); }
+
+.gthumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 2px;
+}
+.gthumb {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--r-ctl);
+  overflow: hidden;
+  background: #000;
+}
+.gthumb img { width: 100%; height: 96px; object-fit: cover; display: block; }
+.gthumb-bar {
+  display: flex;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.gthumb-btn {
+  flex: 1;
+  min-height: 38px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.gthumb-btn:active { background: var(--surface-3); }
+.gthumb-btn:disabled { opacity: .3; }
+.gthumb-btn + .gthumb-btn { border-left: 1px solid var(--line); }
+.gthumb-danger { color: var(--danger); font-weight: 600; }
+
 /* ------------------------------------------------------------------ toast */
 
 .toast {

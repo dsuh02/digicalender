@@ -197,6 +197,19 @@ async function buildControl(f, values, onChange) {
       paint();
       return field(f.label, list, f.help);
     }
+    case 'gallery': {
+      const c = el('select.input');
+      c.append(el('option', { value: '', text: '— pick a gallery set —' }));
+      let sets = [];
+      try { sets = await api.galleries(); } catch { sets = []; }
+      sets.forEach(s => {
+        const o = el('option', { value: s.id, text: `${s.name} (${s.image_count})` });
+        if (s.id === val) o.selected = true;
+        c.append(o);
+      });
+      c.addEventListener('change', () => onChange(f.key, c.value));
+      return field(f.label, c, f.help);
+    }
     case 'scene': {
       const c = el('select.input');
       c.append(el('option', { value: '', text: '— none —' }));

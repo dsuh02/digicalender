@@ -34,7 +34,26 @@ import weather
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 
+# Gallery sets live here, one folder per set. Gitignored: the images are the
+# user's, not the app's — they outlive widgets, sets, even the repo.
+GALLERY_DIR = os.path.join(HERE, "galleries")
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
+MAX_IMAGE_BYTES = 64 * 1024 * 1024
+
 ID_RE = r"([A-Za-z0-9_-]{1,64})"
+
+
+def _slugify(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "set"
+    return s[:60]
+
+
+def _safe_filename(name: str) -> str:
+    base = os.path.basename(name or "image")
+    stem, ext = os.path.splitext(base)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._") or "image"
+    return (stem[:80] + ext.lower())
 
 
 class ApiError(Exception):
@@ -141,7 +160,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store, must-revalidate")
+        # App assets must never be stale; gallery images opt into caching by
+        # supplying their own Cache-Control (duplicating the header would make
+        # browser behaviour a coin flip).
+        if not (extra and "Cache-Control" in extra):
+            self.send_header("Cache-Control", "no-store, must-revalidate")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -773,6 +796,149 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(502, err)
             return self._json(200, {"weather": data, "notice": err})
 
+        # ---- galleries
+        if path == "/api/galleries":
+            if method == "GET":
+                return self._json(200, {"galleries": store.list_galleries()})
+            if method == "POST":
+                b = self._body()
+                name = (b.get("name") or "").strip()[:80]
+                if not name:
+                    raise ApiError(400, "name is required")
+                slug = _slugify(name)
+                if any(g["dirname"] == slug for g in store.list_galleries()):
+                    raise ApiError(400, f"a set named like “{slug}” already exists")
+                folder = os.path.join(GALLERY_DIR, slug)
+                os.makedirs(folder, exist_ok=True)
+                g = store.create_gallery(name, slug)
+                # A folder that already holds images (from a deleted set, or
+                # dropped in over SSH) is adopted wholesale — files are truth.
+                adopted = 0
+                for fn in sorted(os.listdir(folder)):
+                    if os.path.splitext(fn)[1].lower() in IMAGE_EXTS:
+                        store.add_gallery_image(g["id"], fn)
+                        adopted += 1
+                hub.bus.publish("galleries_changed", {})
+                return self._json(201, {"gallery": store.get_gallery(g["id"]),
+                                        "adopted": adopted})
+            raise ApiError(405, "method not allowed")
+
+        if path == "/api/galleries/order" and method == "POST":
+            ids = self._body().get("ids") or []
+            if not isinstance(ids, list):
+                raise ApiError(400, "ids must be a list")
+            n = store.reorder_galleries([str(i) for i in ids][:200])
+            hub.bus.publish("galleries_changed", {})
+            return self._json(200, {"updated": n})
+
+        m = re.fullmatch(rf"/api/galleries/{ID_RE}/images/order", path)
+        if m and method == "POST":
+            ids = self._body().get("ids") or []
+            if not isinstance(ids, list):
+                raise ApiError(400, "ids must be a list")
+            n = store.reorder_gallery_images(m.group(1), [str(i) for i in ids][:2000])
+            hub.bus.publish("galleries_changed", {})
+            return self._json(200, {"updated": n})
+
+        m = re.fullmatch(rf"/api/galleries/{ID_RE}/images", path)
+        if m:
+            g = store.get_gallery(m.group(1))
+            if not g:
+                raise ApiError(404, "gallery not found")
+            if method == "GET":
+                return self._json(200, {"images": store.list_gallery_images(g["id"])})
+            if method == "POST":
+                # Raw body upload: one request per file, filename in a header.
+                # Multipart buys nothing here and costs a parser.
+                from urllib.parse import unquote
+                n = int(self.headers.get("Content-Length") or 0)
+                if n <= 0:
+                    raise ApiError(400, "empty upload")
+                if n > MAX_IMAGE_BYTES:
+                    raise ApiError(413, "image is larger than 64 MB")
+                fn = _safe_filename(unquote(self.headers.get("X-Filename", "image.jpg")))
+                ext = os.path.splitext(fn)[1].lower()
+                if ext not in IMAGE_EXTS:
+                    raise ApiError(400, f"unsupported type {ext or '(none)'} — "
+                                        "jpg, png, webp, gif or avif")
+                folder = os.path.join(GALLERY_DIR, g["dirname"])
+                os.makedirs(folder, exist_ok=True)
+                stem, _ = os.path.splitext(fn)
+                dest = os.path.join(folder, fn)
+                serial = 1
+                while os.path.exists(dest):
+                    serial += 1
+                    fn = f"{stem}-{serial}{ext}"
+                    dest = os.path.join(folder, fn)
+                remaining = n
+                with open(dest, "wb") as out:
+                    while remaining > 0:
+                        chunk = self.rfile.read(min(1 << 20, remaining))
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        remaining -= len(chunk)
+                img = store.add_gallery_image(g["id"], fn)
+                hub.bus.publish("galleries_changed", {})
+                return self._json(201, {"image": img})
+            raise ApiError(405, "method not allowed")
+
+        m = re.fullmatch(rf"/api/galleries/{ID_RE}/images/{ID_RE}", path)
+        if m and method == "DELETE":
+            g = store.get_gallery(m.group(1))
+            img = store.get_gallery_image(m.group(2))
+            if not g or not img or img["gallery_id"] != g["id"]:
+                raise ApiError(404, "image not found")
+            # An explicit per-image delete IS a request to remove the file —
+            # unlike deleting sets or widgets, which never touch disk.
+            store.delete_gallery_image(img["id"])
+            try:
+                os.remove(os.path.join(GALLERY_DIR, g["dirname"], img["filename"]))
+            except OSError:
+                pass
+            hub.bus.publish("galleries_changed", {})
+            return self._json(200, {"ok": True})
+
+        m = re.fullmatch(rf"/api/galleries/{ID_RE}", path)
+        if m:
+            gid = m.group(1)
+            g = store.get_gallery(gid)
+            if not g:
+                raise ApiError(404, "gallery not found")
+            if method == "PATCH":
+                b = self._body()
+                data = {}
+                if "name" in b:
+                    data["name"] = str(b["name"]).strip()[:80]
+                if "position" in b:
+                    data["position"] = _int(b, "position", 0, 500)
+                g = store.update_gallery(gid, data)
+                hub.bus.publish("galleries_changed", {})
+                return self._json(200, {"gallery": g})
+            if method == "DELETE":
+                store.delete_gallery(gid)
+                hub.bus.publish("galleries_changed", {})
+                return self._json(200, {"ok": True,
+                                        "note": "the folder and its images stay on disk"})
+            raise ApiError(405, "method not allowed")
+
+        m = re.fullmatch(rf"/api/gimg/{ID_RE}", path)
+        if m and method == "GET":
+            img = store.get_gallery_image(m.group(1))
+            g = img and store.get_gallery(img["gallery_id"])
+            if not img or not g:
+                raise ApiError(404, "image not found")
+            full = os.path.normpath(os.path.join(GALLERY_DIR, g["dirname"], img["filename"]))
+            if not full.startswith(GALLERY_DIR + os.sep) or not os.path.isfile(full):
+                raise ApiError(404, "image file missing")
+            ctype, _ = mimetypes.guess_type(full)
+            with open(full, "rb") as fh:
+                body = fh.read()
+            # Immutable enough: rows are new ids on re-upload, so cache hard —
+            # a slideshow must not refetch its set every loop.
+            return self._send(200, body, ctype or "image/jpeg",
+                              {"Cache-Control": "public, max-age=86400"})
+
         # ---- display power (DPMS on the panel's X server)
         if path == "/api/display" and method == "POST":
             want_on = bool(self._body().get("on", True))
@@ -838,6 +1004,7 @@ def main() -> int:
     args = ap.parse_args()
 
     store.init_db()
+    os.makedirs(GALLERY_DIR, exist_ok=True)
     hub.start()
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     srv.daemon_threads = True

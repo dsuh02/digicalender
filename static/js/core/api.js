@@ -82,6 +82,31 @@ export const api = {
 
   display: on => req('/api/display', { method: 'POST', body: JSON.stringify({ on }) }),
 
+  // gallery sets
+  galleries: () => req('/api/galleries').then(r => r.galleries),
+  createGallery: name => req('/api/galleries', { method: 'POST', body: JSON.stringify({ name }) }),
+  updateGallery: (id, d) => req(`/api/galleries/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.gallery),
+  deleteGallery: id => req(`/api/galleries/${id}`, { method: 'DELETE' }),
+  orderGalleries: ids => req('/api/galleries/order', { method: 'POST', body: JSON.stringify({ ids }) }),
+  galleryImages: id => req(`/api/galleries/${id}/images`).then(r => r.images),
+  orderGalleryImages: (id, ids) =>
+    req(`/api/galleries/${id}/images/order`, { method: 'POST', body: JSON.stringify({ ids }) }),
+  deleteGalleryImage: (gid, iid) => req(`/api/galleries/${gid}/images/${iid}`, { method: 'DELETE' }),
+  imageUrl: iid => `/api/gimg/${iid}`,
+  uploadGalleryImage: async (gid, file) => {
+    const res = await fetch(`/api/galleries/${gid}/images`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        'X-Filename': encodeURIComponent(file.name || 'image.jpg'),
+      },
+      body: file,
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((body && body.error) || `upload failed (${res.status})`);
+    return body.image;
+  },
+
   weather: (lat, lon, units = 'imperial', days = 5) =>
     req(`/api/weather?lat=${lat}&lon=${lon}&units=${units}&days=${days}`),
 
@@ -126,7 +151,7 @@ export function connectStream() {
       bus.emit('devices_state', id);
     });
     for (const name of ['events_changed', 'todos_changed', 'notification',
-                        'layout_changed', 'devices_changed']) {
+                        'layout_changed', 'devices_changed', 'galleries_changed']) {
       es.addEventListener(name, e => bus.emit(name, JSON.parse(e.data || '{}')));
     }
 

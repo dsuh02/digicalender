@@ -536,7 +536,8 @@ async function openSettings(initialTab = 'Theme') {
   body.append(tabs, panel);
 
   const views = { Theme: renderThemeTab, Calendars: renderCalendars,
-                  Devices: renderDevices, Display: renderDisplay };
+                  Galleries: renderGalleries, Devices: renderDevices,
+                  Display: renderDisplay };
   let active = views[initialTab] ? initialTab : 'Theme';
   const paint = async () => {
     clear(tabs);
@@ -793,6 +794,207 @@ async function editFeed(feed, feedCount = 0) {
     },
   });
   openSheet({ title: isNew ? 'Add calendar' : 'Edit calendar', body: node, actions });
+}
+
+/* Gallery sets: named folders of images on disk. Deleting a set (or a widget
+   showing it) never deletes files; only the per-image ✕ does, deliberately. */
+async function renderGalleries() {
+  const wrap = el('div');
+  let sets = [];
+  try { sets = await api.galleries(); } catch (e) { return el('p.sheet-note', { text: e.message }); }
+
+  const list = el('div.dev-list');
+  if (!sets.length) {
+    list.append(el('p.sheet-note', {
+      text: 'No gallery sets yet. Each set is a folder of images under the app’s galleries/ directory — add one and upload photos from this panel or any phone on the network.',
+    }));
+  }
+  sets.forEach((g, i) => {
+    list.append(el('div.dev-row', {}, [
+      g.cover_id
+        ? el('img.gset-cover', { src: api.imageUrl(g.cover_id), alt: '' })
+        : el('span.gset-cover.gset-cover-empty', {}, [icon('image', 20)]),
+      el('div.dev-main', {}, [
+        el('div.dev-name', { text: g.name }),
+        el('div.dev-meta', { text: `${g.image_count} image${g.image_count === 1 ? '' : 's'} · galleries/${g.dirname}/` }),
+      ]),
+      el('button.btn.btn-small', {
+        text: '▲', 'aria-label': 'Move up', disabled: i === 0,
+        onclick: async () => {
+          const ids = sets.map(s => s.id);
+          [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
+          try { await api.orderGalleries(ids); } catch (e) { toast(e.message, true); }
+          openSettings('Galleries');
+        },
+      }),
+      el('button.btn.btn-small', {
+        text: '▼', 'aria-label': 'Move down', disabled: i === sets.length - 1,
+        onclick: async () => {
+          const ids = sets.map(s => s.id);
+          [ids[i], ids[i + 1]] = [ids[i + 1], ids[i]];
+          try { await api.orderGalleries(ids); } catch (e) { toast(e.message, true); }
+          openSettings('Galleries');
+        },
+      }),
+      el('button.btn.btn-small', {
+        text: 'Play', onclick: () => {
+          close();
+          import('./widgets/gallery.js').then(m =>
+            m.startScreensaver(g.id, { interval: 20, fit: 'contain' }));
+        },
+      }),
+      el('button.btn.btn-small', { text: 'Edit', onclick: () => editGallery(g) }),
+    ]));
+  });
+
+  const nameInput = el('input.input', { type: 'text', placeholder: 'New set name — e.g. Family, Travel' });
+  wrap.append(
+    list,
+    el('div.dev-actions', { style: { marginTop: '14px' } }, [
+      nameInput,
+      el('button.btn.btn-primary', {
+        text: '+ Create set',
+        onclick: async () => {
+          const name = nameInput.value.trim();
+          if (!name) return toast('Give the set a name', true);
+          try {
+            const r = await api.createGallery(name);
+            toast(r.adopted ? `Created — adopted ${r.adopted} images already in the folder`
+                            : 'Created');
+            editGallery(r.gallery);
+          } catch (e) { toast(e.message, true); }
+        },
+      }),
+    ]),
+  );
+  return wrap;
+}
+
+async function editGallery(g) {
+  let images = [];
+  try { images = await api.galleryImages(g.id); } catch (e) { toast(e.message, true); return; }
+
+  const nameInput = el('input.input', { type: 'text', value: g.name });
+  const grid = el('div.gthumbs');
+  let armed = null;    // image id whose ✕ is primed — second tap deletes
+
+  const paint = () => {
+    clear(grid);
+    images.forEach((im, i) => {
+      const primed = armed === im.id;
+      grid.append(el('div.gthumb', {}, [
+        el('img', { src: api.imageUrl(im.id), alt: '', loading: 'lazy' }),
+        el('div.gthumb-bar', {}, [
+          el('button.gthumb-btn', {
+            text: '◀', 'aria-label': 'Move earlier', disabled: i === 0,
+            onclick: async () => {
+              [images[i - 1], images[i]] = [images[i], images[i - 1]];
+              paint();
+              try { await api.orderGalleryImages(g.id, images.map(x => x.id)); }
+              catch (e) { toast(e.message, true); }
+            },
+          }),
+          el('button.gthumb-btn' + (primed ? '.gthumb-danger' : ''), {
+            text: primed ? 'sure?' : '✕',
+            'aria-label': 'Delete image',
+            onclick: async () => {
+              if (!primed) {
+                armed = im.id;
+                paint();
+                setTimeout(() => { if (armed === im.id) { armed = null; paint(); } }, 2500);
+                return;
+              }
+              armed = null;
+              try {
+                await api.deleteGalleryImage(g.id, im.id);
+                images = images.filter(x => x.id !== im.id);
+              } catch (e) { toast(e.message, true); }
+              paint();
+            },
+          }),
+          el('button.gthumb-btn', {
+            text: '▶', 'aria-label': 'Move later', disabled: i === images.length - 1,
+            onclick: async () => {
+              [images[i], images[i + 1]] = [images[i + 1], images[i]];
+              paint();
+              try { await api.orderGalleryImages(g.id, images.map(x => x.id)); }
+              catch (e) { toast(e.message, true); }
+            },
+          }),
+        ]),
+      ]));
+    });
+    if (!images.length) {
+      grid.append(el('p.sheet-note', { text: 'Empty — add images below.' }));
+    }
+  };
+  paint();
+
+  // Hidden file input: works from the panel, and from a phone browser on the
+  // LAN it opens the photo picker — the easiest way to fill a set.
+  const picker = el('input', {
+    type: 'file', accept: 'image/*', multiple: true, style: { display: 'none' },
+  });
+  picker.addEventListener('change', async () => {
+    const files = [...picker.files];
+    picker.value = '';
+    let done = 0;
+    for (const f of files) {
+      toast(`Uploading ${done + 1}/${files.length}…`);
+      try {
+        const img = await api.uploadGalleryImage(g.id, f);
+        if (img) images.push(img);
+        done += 1;
+      } catch (e) { toast(`${f.name}: ${e.message}`, true); }
+    }
+    if (done) toast(`Added ${done} image${done === 1 ? '' : 's'}`);
+    paint();
+  });
+
+  const body = el('div.form', {}, [
+    el('label.field', {}, [el('span.field-label', { text: 'Set name' }), nameInput]),
+    el('div.field', {}, [
+      el('span.field-label', { text: 'Images — ◀ ▶ reorder, ✕ deletes the file' }),
+      grid,
+      el('div.dev-actions', {}, [
+        el('button.btn', { text: '+ Add images', onclick: () => picker.click() }),
+        el('button.btn', {
+          text: 'Play', onclick: () => {
+            close();
+            import('./widgets/gallery.js').then(m =>
+              m.startScreensaver(g.id, { interval: 20, fit: 'contain' }));
+          },
+        }),
+      ]),
+      picker,
+    ]),
+  ]);
+
+  openSheet({
+    title: `Edit “${g.name}”`,
+    body, wide: true,
+    actions: [
+      {
+        label: 'Delete set', kind: 'danger', onClick: () => {
+          close();
+          confirmSheet('Delete this set?',
+            `“${g.name}” disappears from the app. The folder galleries/${g.dirname}/ and every image in it stay on the PC — recreate a set with the same name to adopt them back.`,
+            async () => {
+              try { await api.deleteGallery(g.id); } catch (e) { toast(e.message, true); }
+              openSettings('Galleries');
+            });
+        },
+      },
+      { label: 'Done', kind: 'primary', onClick: async () => {
+          const name = nameInput.value.trim();
+          if (name && name !== g.name) {
+            try { await api.updateGallery(g.id, { name }); } catch (e) { toast(e.message, true); }
+          }
+          close();
+          openSettings('Galleries');
+        } },
+    ],
+  });
 }
 
 async function renderDevices() {
@@ -1110,6 +1312,10 @@ function setIdleLevel(v) {
 }
 
 function tickIdle() {
+  // A running fullscreen screensaver IS the display's purpose right now:
+  // hold dim and sleep off, but leave the idle clock alone — when the show
+  // ends (touch or its 3-hour cap) the stages apply immediately after.
+  if (document.getElementById('screensaver')) return setIdleLevel(1);
   const c = idleCfg();
   if (!c.on) { setDisplayPower(true); return setIdleLevel(1); }
   const mins = (Date.now() - idle.last) / 60000;

@@ -154,6 +154,27 @@ CREATE TABLE IF NOT EXISTS devices (
     created_at TEXT NOT NULL
 );
 
+-- Gallery sets: one row per set, one folder per set under galleries/ on disk.
+-- The DB stores names + order; the FILES are the user's and outlive both the
+-- widgets showing them and (deliberately) the set row itself.
+CREATE TABLE IF NOT EXISTS galleries (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    dirname    TEXT NOT NULL UNIQUE,
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gallery_images (
+    id         TEXT PRIMARY KEY,
+    gallery_id TEXT NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+    filename   TEXT NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE (gallery_id, filename)
+);
+CREATE INDEX IF NOT EXISTS idx_gimages_gallery ON gallery_images(gallery_id, position);
+
 -- actions = [{device_id, command, params}], run in order on one tap.
 CREATE TABLE IF NOT EXISTS scenes (
     id         TEXT PRIMARY KEY,
@@ -212,7 +233,7 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def init_db() -> None:
@@ -227,6 +248,9 @@ def init_db() -> None:
         # v3: per-source visibility for calendar feeds.
         q("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS visible BOOLEAN NOT NULL DEFAULT TRUE")
         q("UPDATE schema_version SET version = 3")
+    if row["version"] < 4:
+        # v4: gallery tables — created by SCHEMA above; only the version moves.
+        q("UPDATE schema_version SET version = 4")
 
 
 # --------------------------------------------------------------------- events
@@ -670,6 +694,88 @@ def update_scene(sid: str, data: dict) -> dict | None:
 
 def delete_scene(sid: str) -> bool:
     return q("DELETE FROM scenes WHERE id = %s", (sid,)) > 0
+
+
+# ---------------------------------------------------------------- galleries
+
+def list_galleries() -> list[dict]:
+    return q("""SELECT g.*, COUNT(i.id) AS image_count,
+                       (SELECT id FROM gallery_images
+                        WHERE gallery_id = g.id ORDER BY position, created_at LIMIT 1) AS cover_id
+                FROM galleries g LEFT JOIN gallery_images i ON i.gallery_id = g.id
+                GROUP BY g.id ORDER BY g.position, g.created_at""", fetch="all")
+
+
+def get_gallery(gid: str) -> dict | None:
+    return q("SELECT * FROM galleries WHERE id = %s", (gid,), fetch="one")
+
+
+def create_gallery(name: str, dirname: str) -> dict:
+    gid = new_uid()
+    pos = q("SELECT COALESCE(MAX(position), 0) + 1 AS p FROM galleries", fetch="one")["p"]
+    q("INSERT INTO galleries (id, name, dirname, position, created_at) VALUES (%s,%s,%s,%s,%s)",
+      (gid, name, dirname, pos, now_iso()))
+    return get_gallery(gid)
+
+
+def update_gallery(gid: str, data: dict) -> dict | None:
+    if not get_gallery(gid):
+        return None
+    sets, vals = [], []
+    for f in ("name", "position"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    if sets:
+        vals.append(gid)
+        q(f"UPDATE galleries SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_gallery(gid)
+
+
+def delete_gallery(gid: str) -> bool:
+    """Rows only — the folder and its files stay on disk, on purpose."""
+    return q("DELETE FROM galleries WHERE id = %s", (gid,)) > 0
+
+
+def reorder_galleries(ids: list[str]) -> int:
+    n = 0
+    for i, gid in enumerate(ids):
+        n += q("UPDATE galleries SET position = %s WHERE id = %s", (i, gid))
+    return n
+
+
+def list_gallery_images(gid: str) -> list[dict]:
+    return q("""SELECT * FROM gallery_images WHERE gallery_id = %s
+                ORDER BY position, created_at""", (gid,), fetch="all")
+
+
+def get_gallery_image(img_id: str) -> dict | None:
+    return q("SELECT * FROM gallery_images WHERE id = %s", (img_id,), fetch="one")
+
+
+def add_gallery_image(gid: str, filename: str) -> dict:
+    iid = new_uid()
+    pos = q("SELECT COALESCE(MAX(position), 0) + 1 AS p FROM gallery_images WHERE gallery_id = %s",
+            (gid,), fetch="one")["p"]
+    q("""INSERT INTO gallery_images (id, gallery_id, filename, position, created_at)
+         VALUES (%s,%s,%s,%s,%s)
+         ON CONFLICT (gallery_id, filename) DO NOTHING""",
+      (iid, gid, filename, pos, now_iso()))
+    row = q("SELECT * FROM gallery_images WHERE gallery_id = %s AND filename = %s",
+            (gid, filename), fetch="one")
+    return row
+
+
+def delete_gallery_image(img_id: str) -> bool:
+    return q("DELETE FROM gallery_images WHERE id = %s", (img_id,)) > 0
+
+
+def reorder_gallery_images(gid: str, ids: list[str]) -> int:
+    n = 0
+    for i, iid in enumerate(ids):
+        n += q("UPDATE gallery_images SET position = %s WHERE id = %s AND gallery_id = %s",
+               (i, iid, gid))
+    return n
 
 
 # ----------------------------------------------------------------- settings

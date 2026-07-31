@@ -75,6 +75,7 @@ async function boot() {
   initTopBar();
   initIdleDim();
   initTouchFeedback();
+  initScrollbars();
 }
 
 async function reload() {
@@ -1133,6 +1134,23 @@ function initIdleDim() {
   }
   setInterval(tickIdle, 10000);
   window._idle = { state: idle, tick: tickIdle };    // reachable for testing
+}
+
+/* -------------------------------------------------------------- scrollbars */
+
+/* Thumbs are transparent by default (app.css); the element that is actually
+   scrolling gets .scrolling-now for the duration plus a beat. Hover can't
+   drive this on a touch panel — actual scroll motion is the only honest
+   signal. Capture phase because scroll events don't bubble. */
+function initScrollbars() {
+  const timers = new WeakMap();
+  document.addEventListener('scroll', e => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    t.classList.add('scrolling-now');
+    clearTimeout(timers.get(t));
+    timers.set(t, setTimeout(() => t.classList.remove('scrolling-now'), 700));
+  }, true);
 }
 
 /* ---------------------------------------------------------- touch feedback */

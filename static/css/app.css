@@ -53,6 +53,20 @@
 
 * { box-sizing: border-box; }
 
+/* Scrollbars, everywhere: a 5px thumb and nothing else — no track, no end
+   buttons — and invisible until the element is actually scrolling. There is
+   no hover on a touch panel, so JS stamps .scrolling-now on the scrolled
+   element and removes it shortly after the motion stops (initScrollbars).
+   NOTE: never set the standard `scrollbar-width`/`scrollbar-color` props on
+   an element you want these to style — in Chromium their presence turns the
+   ::-webkit-scrollbar pseudos off for that element. */
+*::-webkit-scrollbar { width: 5px; height: 5px; background: transparent; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+*::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+.scrolling-now::-webkit-scrollbar-thumb { background: var(--line-strong); }
+
 html, body {
   margin: 0;
   height: 100%;

@@ -705,7 +705,10 @@ async function renderCalendars() {
 
   wrap.append(
     el('div.dev-actions', {}, [
-      el('button.btn.btn-primary', { text: '+ Add calendar', onclick: () => editFeed(null) }),
+      el('button.btn.btn-primary', {
+        text: '+ Add calendar',
+        onclick: () => editFeed(null, feedList.length),
+      }),
       feedList.length ? el('button.btn', {
         text: 'Sync all', onclick: async (e) => {
           e.currentTarget.disabled = true;
@@ -722,8 +725,14 @@ async function renderCalendars() {
   return wrap;
 }
 
-async function editFeed(feed) {
+async function editFeed(feed, feedCount = 0) {
   const isNew = !feed;
+  // Every source must land with a colour of its own, even when the form is
+  // never touched — an untouched swatch row used to save '' and every event
+  // fell back to the same theme primary. Rotate through the palette by how
+  // many feeds already exist.
+  const palette = eventPalette(getTheme());
+  const suggested = palette[feedCount % palette.length].value;
   const { node, values } = await buildForm([
     { key: 'url', label: 'Calendar address', type: 'textarea',
       placeholder: 'https://…/calendar.ics  or a Google embed link',
@@ -731,7 +740,8 @@ async function editFeed(feed) {
     { key: 'name', label: 'Name', type: 'text', placeholder: 'Work, Family…',
       help: 'Optional — the feed’s own name is used when blank' },
     { key: 'color', label: 'Colour', type: 'color' },
-  ], feed ? { url: feed.url, name: feed.name, color: feed.color } : {});
+  ], feed ? { url: feed.url, name: feed.name, color: feed.color || suggested }
+          : { color: suggested });
 
   let busy = false;
   const actions = [];

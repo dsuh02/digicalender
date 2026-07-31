@@ -194,6 +194,7 @@ export async function openCalendarSources() {
       text: 'No calendar subscriptions yet. Use Manage to add Google or Outlook calendars by URL.',
     }));
   }
+  const palette = eventPalette(getTheme()).map(c => c.value);
   const list = el('div.src-list');
   for (const f of feedList) {
     const input = el('input.switch-input', { type: 'checkbox' });
@@ -207,12 +208,34 @@ export async function openCalendarSources() {
         toast(e.message, true);
       }
     });
+
+    // Tap the dot to cycle the source through the palette. Right here in
+    // normal mode, because "make work green" shouldn't need a settings dive.
+    // backgroundColor, not the background shorthand: inline shorthand would
+    // reset background-clip and the small dot would balloon to its tap target.
+    const dot = el('button.src-dot.src-dot-btn', {
+      type: 'button', 'aria-label': `Change colour of ${f.name}`,
+      style: f.color ? { backgroundColor: f.color } : {},
+      onclick: async (e) => {
+        e.preventDefault();               // inside a <label>: don't flip the switch
+        e.stopPropagation();
+        const at = palette.indexOf(f.color);
+        const next = palette[(at + 1) % palette.length];
+        try {
+          await api.updateFeed(f.id, { color: next });
+          f.color = next;
+          dot.style.backgroundColor = next;  // events recolour via events_changed
+        } catch (err) { toast(err.message, true); }
+      },
+    });
+
     list.append(el('label.src-row', {}, [
-      el('span.src-dot', { style: f.color ? { background: f.color } : {} }),
+      dot,
       el('span.src-main', {}, [
         el('span.src-name', { text: f.name }),
         el('span.src-meta', {
-          text: f.count != null ? `${f.count} events` : (f.status || ''),
+          text: (f.count != null ? `${f.count} events` : (f.status || '')) +
+                ' · tap the dot to recolour',
         }),
       ]),
       input, el('span.switch'),

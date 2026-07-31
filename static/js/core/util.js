@@ -18,7 +18,17 @@ export function el(spec, props = {}, children = []) {
     if (v === null || v === undefined || v === false) continue;
     if (k === 'text') node.textContent = v;
     else if (k === 'html') node.innerHTML = v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
+    else if (k === 'style' && typeof v === 'object') {
+      // Custom properties (--c and friends) MUST go through setProperty:
+      // Object.assign(node.style, {'--c': x}) silently attaches a plain JS
+      // expando and no CSS variable ever exists — every var(--c, fallback)
+      // in the stylesheets renders the fallback. This is exactly how all
+      // per-source calendar colours quietly became theme-primary.
+      for (const [sk, sv] of Object.entries(v)) {
+        if (sk.startsWith('--')) node.style.setProperty(sk, sv);
+        else node.style[sk] = sv;
+      }
+    }
     else if (k === 'dataset') Object.assign(node.dataset, v);
     else if (k.startsWith('on') && typeof v === 'function') {
       node.addEventListener(k.slice(2).toLowerCase(), v);

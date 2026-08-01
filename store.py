@@ -90,13 +90,33 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+-- Household members. Declared before `pages`, which references it.
+-- `macs` drive optional presence detection on the LAN; `theme` overrides the
+-- global scheme while that person is the active profile.
+CREATE TABLE IF NOT EXISTS people (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    greeting   TEXT NOT NULL DEFAULT '',
+    color      TEXT NOT NULL DEFAULT '',
+    avatar     TEXT NOT NULL DEFAULT '',
+    macs       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    theme      JSONB,
+    settings   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    position   INTEGER NOT NULL DEFAULT 0,
+    last_seen  TEXT,
+    created_at TEXT NOT NULL
+);
+
 -- A page is one screen of the dashboard; swipe left/right moves between them.
+-- person_id NULL = shared with the whole household. ON DELETE SET NULL, never
+-- CASCADE: removing a person must not destroy the pages they built.
 CREATE TABLE IF NOT EXISTS pages (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
     position   INTEGER NOT NULL DEFAULT 0,
     cols       INTEGER NOT NULL DEFAULT 48,
     rows       INTEGER NOT NULL DEFAULT 32,
+    person_id  TEXT REFERENCES people(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL
 );
 
@@ -233,7 +253,7 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def init_db() -> None:
@@ -251,6 +271,13 @@ def init_db() -> None:
     if row["version"] < 4:
         # v4: gallery tables — created by SCHEMA above; only the version moves.
         q("UPDATE schema_version SET version = 4")
+    if row["version"] < 5:
+        # v5: household members, and page ownership. ON DELETE SET NULL, not
+        # CASCADE: removing a person must never silently destroy the pages
+        # they built — those become shared instead.
+        q("""ALTER TABLE pages ADD COLUMN IF NOT EXISTS person_id TEXT
+             REFERENCES people(id) ON DELETE SET NULL""")
+        q("UPDATE schema_version SET version = 5")
 
 
 # --------------------------------------------------------------------- events
@@ -432,10 +459,12 @@ def get_page(pid: str) -> dict | None:
     return q("SELECT * FROM pages WHERE id = %s", (pid,), fetch="one")
 
 
-def create_page(name: str, position: int = 0, cols: int = 48, rows: int = 32) -> str:
+def create_page(name: str, position: int = 0, cols: int = 48, rows: int = 32,
+                person_id: str | None = None) -> str:
     pid = new_uid()
-    q("INSERT INTO pages (id, name, position, cols, rows, created_at) VALUES (%s,%s,%s,%s,%s,%s)",
-      (pid, name, position, cols, rows, now_iso()))
+    q("""INSERT INTO pages (id, name, position, cols, rows, person_id, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+      (pid, name, position, cols, rows, person_id, now_iso()))
     return pid
 
 
@@ -443,7 +472,7 @@ def update_page(pid: str, data: dict) -> dict | None:
     if not get_page(pid):
         return None
     sets, vals = [], []
-    for f in ("name", "position", "cols", "rows"):
+    for f in ("name", "position", "cols", "rows", "person_id"):
         if f in data:
             sets.append(f"{f} = %s")
             vals.append(data[f])
@@ -694,6 +723,66 @@ def update_scene(sid: str, data: dict) -> dict | None:
 
 def delete_scene(sid: str) -> bool:
     return q("DELETE FROM scenes WHERE id = %s", (sid,)) > 0
+
+
+# ------------------------------------------------------------------ people
+
+def list_people() -> list[dict]:
+    return q("SELECT * FROM people ORDER BY position, created_at", fetch="all")
+
+
+def get_person(pid: str) -> dict | None:
+    return q("SELECT * FROM people WHERE id = %s", (pid,), fetch="one")
+
+
+def create_person(data: dict) -> dict:
+    pid = new_uid()
+    pos = q("SELECT COALESCE(MAX(position), 0) + 1 AS p FROM people", fetch="one")["p"]
+    q("""INSERT INTO people (id, name, greeting, color, avatar, macs, theme,
+             settings, position, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,'{}'::jsonb,%s,%s)""",
+      (pid, data["name"], data.get("greeting", "") or "", data.get("color", "") or "",
+       data.get("avatar", "") or "", Jsonb(data.get("macs") or []),
+       Jsonb(data["theme"]) if data.get("theme") else None, pos, now_iso()))
+    return get_person(pid)
+
+
+def update_person(pid: str, data: dict) -> dict | None:
+    if not get_person(pid):
+        return None
+    sets, vals = [], []
+    for f in ("name", "greeting", "color", "avatar", "position", "last_seen"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    for f in ("macs", "settings"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(Jsonb(data[f]))
+    if "theme" in data:
+        sets.append("theme = %s")
+        vals.append(Jsonb(data["theme"]) if data["theme"] else None)
+    if not sets:
+        return get_person(pid)
+    vals.append(pid)
+    q(f"UPDATE people SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_person(pid)
+
+
+def delete_person(pid: str) -> bool:
+    """Their pages survive as shared pages — see the FK's ON DELETE SET NULL."""
+    return q("DELETE FROM people WHERE id = %s", (pid,)) > 0
+
+
+def reorder_people(ids: list[str]) -> int:
+    n = 0
+    for i, pid in enumerate(ids):
+        n += q("UPDATE people SET position = %s WHERE id = %s", (i, pid))
+    return n
+
+
+def mark_person_seen(pid: str) -> None:
+    q("UPDATE people SET last_seen = %s WHERE id = %s", (now_iso(), pid))
 
 
 # ---------------------------------------------------------------- galleries

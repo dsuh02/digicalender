@@ -5,11 +5,12 @@ import { AgendaWidget, DayWidget, MonthWidget, WeekWidget } from './calendar.js'
 import { GalleryWidget } from './gallery.js';
 import { DeviceGridWidget, MediaWidget, RokuRemoteWidget, ScenesWidget } from './home.js';
 import { ClockWidget, LabelWidget, WeatherWidget } from './info.js';
+import { GreetingWidget, PeopleWidget } from './people.js';
 import { NotificationsWidget, TodoWidget } from './tasks.js';
 
 export const WIDGETS = [
   MonthWidget, WeekWidget, DayWidget, AgendaWidget,
-  ClockWidget, WeatherWidget, LabelWidget, GalleryWidget,
+  ClockWidget, GreetingWidget, WeatherWidget, LabelWidget, GalleryWidget, PeopleWidget,
   TodoWidget, NotificationsWidget,
   DeviceGridWidget, ScenesWidget, RokuRemoteWidget, MediaWidget,
 ];

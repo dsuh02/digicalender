@@ -199,6 +199,39 @@ def _reminder_loop(stop: threading.Event) -> None:
         stop.wait(REMINDER_INTERVAL)
 
 
+PRESENCE_INTERVAL = 90.0
+PRESENCE_GRACE_MIN = 20      # "home" if seen within this many minutes
+
+
+def _presence_loop(stop: threading.Event) -> None:
+    """Who's home, by MAC on the LAN.
+
+    Phones sleep their radios and stop answering ARP for minutes at a time, so
+    a single miss means nothing — presence is "seen within PRESENCE_GRACE_MIN",
+    not "answered this instant". Approximate on purpose; it drives a greeting,
+    not a lock.
+    """
+    from devices.discovery import _neighbour_macs, _sweep_arp
+    stop.wait(30)
+    while not stop.is_set():
+        try:
+            people = [p for p in store.list_people() if p.get("macs")]
+            if people:
+                _sweep_arp()                      # warm the neighbour table
+                seen = {mac for _ip, mac in _neighbour_macs()}
+                changed = False
+                for p in people:
+                    want = {str(m).lower().strip() for m in (p.get("macs") or [])}
+                    if want & seen:
+                        store.mark_person_seen(p["id"])
+                        changed = True
+                if changed:
+                    bus.publish("people_changed", {})
+        except Exception:
+            pass
+        stop.wait(PRESENCE_INTERVAL)
+
+
 def _feed_loop(stop: threading.Event) -> None:
     """Keep calendar subscriptions fresh. First run happens shortly after boot
     so a restart never shows stale meetings for 15 minutes."""
@@ -223,7 +256,8 @@ def start() -> None:
         return
     for fn, name in ((_device_loop, "device-poller"),
                      (_reminder_loop, "reminder-ticker"),
-                     (_feed_loop, "feed-sync")):
+                     (_feed_loop, "feed-sync"),
+                     (_presence_loop, "presence")):
         t = threading.Thread(target=fn, args=(_stop,), name=name, daemon=True)
         t.start()
         _threads.append(t)

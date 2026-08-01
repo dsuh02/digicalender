@@ -82,6 +82,14 @@ export const api = {
 
   display: on => req('/api/display', { method: 'POST', body: JSON.stringify({ on }) }),
 
+  // household members
+  people: () => req('/api/people').then(r => r.people),
+  createPerson: d => req('/api/people', { method: 'POST', body: JSON.stringify(d) }).then(r => r.person),
+  updatePerson: (id, d) => req(`/api/people/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.person),
+  deletePerson: id => req(`/api/people/${id}`, { method: 'DELETE' }),
+  orderPeople: ids => req('/api/people/order', { method: 'POST', body: JSON.stringify({ ids }) }),
+  lanHosts: () => req('/api/people/lan').then(r => r.hosts),
+
   // gallery sets
   galleries: () => req('/api/galleries').then(r => r.galleries),
   createGallery: name => req('/api/galleries', { method: 'POST', body: JSON.stringify({ name }) }),
@@ -151,7 +159,8 @@ export function connectStream() {
       bus.emit('devices_state', id);
     });
     for (const name of ['events_changed', 'todos_changed', 'notification',
-                        'layout_changed', 'devices_changed', 'galleries_changed']) {
+                        'layout_changed', 'devices_changed', 'galleries_changed',
+                        'people_changed']) {
       es.addEventListener(name, e => bus.emit(name, JSON.parse(e.data || '{}')));
     }
 

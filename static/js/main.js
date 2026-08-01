@@ -23,13 +23,17 @@ import {
   normalize as normalizeTheme, resolve as resolveTheme,
 } from './core/theme.js';
 import { clamp, clear, debounce, el } from './core/util.js';
+import { initials } from './widgets/people.js';
 import { CATEGORIES, WIDGETS, widgetDef } from './widgets/index.js';
 
 const BAR_HIDE_MS = 7000;
 const EDGE_PX = 32;          // how close to the top a pull-down must start
 
 const state = {
-  pages: [],
+  pages: [],                 // every page, unfiltered
+  visiblePages: [],          // shared + the active person's
+  people: [],
+  activePerson: '',
   settings: {},
   pageIndex: 0,
   editing: false,
@@ -60,12 +64,17 @@ async function boot() {
   dom.settingsBtn.addEventListener('click', () => openSettings());
   dom.pageBtn.addEventListener('click', openPageManager);
   window._openSettings = openSettings;   // calendar widgets jump to the Calendars tab
+  window._activePerson = () => state.activePerson;   // people widgets read/switch
+  window._setActivePerson = setActivePerson;
 
   bus.on('connected', ok => {
     dom.status.classList.toggle('bad', !ok);
     dom.status.title = ok ? 'Live' : 'Reconnecting…';
   });
   bus.on('layout_changed', () => { if (!state.editing) reload(); });
+  bus.on('people_changed', async () => {
+    try { state.people = await api.people(); } catch { /* keep what we have */ }
+  });
 
   await reload();
   connectStream();
@@ -80,20 +89,40 @@ async function boot() {
 
 async function reload() {
   try {
-    const data = await api.dashboard();
+    const [data, people] = await Promise.all([api.dashboard(), api.people().catch(() => [])]);
     state.pages = data.pages || [];
     state.settings = data.settings || {};
+    state.people = people || [];
   } catch (e) {
     toast(`Could not load the dashboard: ${e.message}`, true);
     return;
   }
+  state.activePerson = state.settings.active_person || '';
+  // A profile that was deleted must not leave the panel showing nothing.
+  if (state.activePerson && !state.people.some(p => p.id === state.activePerson)) {
+    state.activePerson = '';
+  }
   applySavedTheme();
-  state.pageIndex = clamp(state.pageIndex, 0, Math.max(0, state.pages.length - 1));
+  computeVisiblePages();
   renderTabs();
   renderAllPages();
 }
 
+/** Shared pages, plus the active person's own. */
+function computeVisiblePages() {
+  state.visiblePages = state.pages.filter(
+    p => !p.person_id || p.person_id === state.activePerson);
+  state.pageIndex = clamp(state.pageIndex, 0, Math.max(0, state.visiblePages.length - 1));
+}
+
 function applySavedTheme() {
+  // A person's theme overrides the household one while they're active, so the
+  // panel looks like theirs the moment they tap in.
+  const person = state.people.find(p => p.id === state.activePerson);
+  if (person && person.theme) {
+    applyTheme({ ...DEFAULT_THEME, ...person.theme });
+    return;
+  }
   try {
     const raw = state.settings.theme;
     applyTheme(raw ? { ...DEFAULT_THEME, ...JSON.parse(raw) } : DEFAULT_THEME);
@@ -102,11 +131,24 @@ function applySavedTheme() {
   }
 }
 
+async function setActivePerson(id) {
+  if (state.activePerson === id) return;
+  state.activePerson = id || '';
+  state.pageIndex = 0;
+  applySavedTheme();
+  computeVisiblePages();
+  renderTabs();
+  renderAllPages();
+  bus.emit('active_person', state.activePerson);
+  try { state.settings = await api.saveSettings({ active_person: state.activePerson }); }
+  catch { /* the switch already happened on screen; persistence is a bonus */ }
+}
+
 /* ------------------------------------------------------------------ pages */
 
 function renderTabs() {
   clear(dom.tabs);
-  state.pages.forEach((p, i) => {
+  state.visiblePages.forEach((p, i) => {
     dom.tabs.append(el('button.tab', {
       text: p.name,
       'aria-selected': String(i === state.pageIndex),
@@ -117,8 +159,8 @@ function renderTabs() {
 
 function renderDots() {
   clear(dom.dots);
-  if (state.pages.length < 2) return;
-  state.pages.forEach((_, i) => {
+  if (state.visiblePages.length < 2) return;
+  state.visiblePages.forEach((_, i) => {
     dom.dots.append(el('span.dot' + (i === state.pageIndex ? '.on' : '')));
   });
 }
@@ -144,7 +186,7 @@ function renderAllPages() {
     try { await api.saveLayout(layout); } catch (e) { toast(e.message, true); }
   }, 400);
 
-  for (const page of state.pages) {
+  for (const page of state.visiblePages) {
     const pageEl = el('div.page');
     const host = el('div.grid-host');
     pageEl.append(host);
@@ -200,7 +242,7 @@ function remountWidget(w) {
 }
 
 function currentPage() {
-  return state.pages[state.pageIndex];
+  return state.visiblePages[state.pageIndex];
 }
 
 function currentGrid() {
@@ -209,7 +251,7 @@ function currentGrid() {
 }
 
 function setPage(i, animate) {
-  state.pageIndex = clamp(i, 0, Math.max(0, state.pages.length - 1));
+  state.pageIndex = clamp(i, 0, Math.max(0, state.visiblePages.length - 1));
   dom.pager.classList.toggle('animating', !!animate);
   dom.pager.classList.remove('dragging');
   dom.pager.style.transform = `translateX(${-state.pageIndex * 100}%)`;
@@ -265,7 +307,7 @@ function initPager() {
 
     let off = drag.base + (a - drag.start);
     // Rubber-band past the ends rather than stopping dead.
-    const min = -(state.pages.length - 1) * dom.stage.clientWidth;
+    const min = -(state.visiblePages.length - 1) * dom.stage.clientWidth;
     if (off > 0) off *= 0.30;
     if (off < min) off = min + (off - min) * 0.30;
     dom.pager.style.transform = `translateX(${off}px)`;
@@ -473,8 +515,26 @@ function openPageManager() {
   const cols = el('input.input', { type: 'number', min: 8, max: 200, value: page.cols });
   const rows = el('input.input', { type: 'number', min: 8, max: 200, value: page.rows });
 
+  // Who this page belongs to. Shared pages are always on screen; a person's
+  // pages appear only while they're the active profile.
+  const owner = el('select.input');
+  owner.append(el('option', { value: '', text: 'Shared — everyone sees it' }));
+  state.people.forEach(p => {
+    const o = el('option', { value: p.id, text: `${p.name} only` });
+    if (p.id === (page.person_id || '')) o.selected = true;
+    owner.append(o);
+  });
+
   const body = el('div.form', {}, [
     el('label.field', {}, [el('span.field-label', { text: 'Page name' }), name]),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'Belongs to' }), owner,
+      el('span.field-help', {
+        text: state.people.length
+          ? 'A person’s page shows only while their profile is active.'
+          : 'Add household members under Settings › People to give pages an owner.',
+      }),
+    ]),
     el('div.grid2', {}, [
       el('label.field', {}, [el('span.field-label', { text: 'Grid columns' }), cols]),
       el('label.field', {}, [el('span.field-label', { text: 'Grid rows' }), rows]),
@@ -518,6 +578,7 @@ function openPageManager() {
         await api.updatePage(page.id, {
           name: name.value.trim() || 'Page',
           cols: Number(cols.value), rows: Number(rows.value),
+          person_id: owner.value || null,
         });
         close();
         await reload();
@@ -535,9 +596,9 @@ async function openSettings(initialTab = 'Theme') {
   const panel = el('div.subpanel');
   body.append(tabs, panel);
 
-  const views = { Theme: renderThemeTab, Calendars: renderCalendars,
-                  Galleries: renderGalleries, Devices: renderDevices,
-                  Display: renderDisplay };
+  const views = { Theme: renderThemeTab, People: renderPeople,
+                  Calendars: renderCalendars, Galleries: renderGalleries,
+                  Devices: renderDevices, Display: renderDisplay };
   let active = views[initialTab] ? initialTab : 'Theme';
   const paint = async () => {
     clear(tabs);
@@ -794,6 +855,220 @@ async function editFeed(feed, feedCount = 0) {
     },
   });
   openSheet({ title: isNew ? 'Add calendar' : 'Edit calendar', body: node, actions });
+}
+
+/* Household members: a greeting, a look, and pages of their own. */
+async function renderPeople() {
+  const wrap = el('div');
+  let people = [];
+  try { people = await api.people(); } catch (e) { return el('p.sheet-note', { text: e.message }); }
+  state.people = people;
+
+  const list = el('div.dev-list');
+  if (!people.length) {
+    list.append(el('p.sheet-note', {
+      text: 'No one added yet. Each person gets their own greeting, colour and pages — and the panel switches between them with a tap.',
+    }));
+  }
+  people.forEach((p, i) => {
+    const pageCount = state.pages.filter(pg => pg.person_id === p.id).length;
+    list.append(el('div.dev-row', {}, [
+      el('span.person-face.person-face-sm', {
+        style: p.color ? { '--c': p.color } : {},
+        text: p.avatar || initials(p.name),
+      }),
+      el('div.dev-main', {}, [
+        el('div.dev-name', { text: p.name + (p.id === state.activePerson ? '  · active' : '') }),
+        el('div.dev-meta', {
+          text: [
+            pageCount ? `${pageCount} page${pageCount === 1 ? '' : 's'}` : 'no pages yet',
+            (p.macs || []).length ? (p.home ? 'home now' : 'away') : 'no device linked',
+            p.theme ? 'own theme' : null,
+          ].filter(Boolean).join(' · '),
+        }),
+      ]),
+      el('button.btn.btn-small', {
+        text: '▲', 'aria-label': 'Move up', disabled: i === 0,
+        onclick: async () => {
+          const ids = people.map(x => x.id);
+          [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
+          try { await api.orderPeople(ids); } catch (e) { toast(e.message, true); }
+          openSettings('People');
+        },
+      }),
+      el('button.btn.btn-small', {
+        text: p.id === state.activePerson ? 'Active' : 'Switch to',
+        disabled: p.id === state.activePerson,
+        onclick: async () => { close(); await setActivePerson(p.id); },
+      }),
+      el('button.btn.btn-small', { text: 'Edit', onclick: () => editPerson(p) }),
+    ]));
+  });
+
+  const nameInput = el('input.input', { type: 'text', placeholder: 'Name — e.g. Dan, Amaya' });
+  wrap.append(
+    list,
+    el('div.dev-actions', { style: { marginTop: '14px' } }, [
+      nameInput,
+      el('button.btn.btn-primary', {
+        text: '+ Add person',
+        onclick: async () => {
+          const name = nameInput.value.trim();
+          if (!name) return toast('Give them a name', true);
+          try {
+            const p = await api.createPerson({ name });
+            state.people.push(p);
+            editPerson(p);
+          } catch (e) { toast(e.message, true); }
+        },
+      }),
+    ]),
+    el('p.sheet-note', {
+      text: 'Add a “Who’s using this” widget to switch profiles from the wall, and a “Greeting” widget for the welcome line. Pages get an owner in Page settings (⋯ in edit mode).',
+    }),
+  );
+  return wrap;
+}
+
+async function editPerson(p) {
+  const { node, values } = await buildForm([
+    { key: 'name', label: 'Name', type: 'text' },
+    { key: 'avatar', label: 'Avatar', type: 'text',
+      placeholder: initials(p.name),
+      help: 'An emoji or a couple of letters — blank uses their initials' },
+    { key: 'greeting', label: 'Custom greeting', type: 'text',
+      placeholder: 'Hey {name}, let’s go',
+      help: 'Blank gives a time-aware greeting. {name} inserts their name.' },
+    { key: 'color', label: 'Colour', type: 'color' },
+  ], { name: p.name, avatar: p.avatar || '', greeting: p.greeting || '',
+       color: p.color || '' });
+
+  // Devices: presence is optional, and typing a MAC from memory is nobody's
+  // idea of setup — pick from what's on the network right now.
+  let macs = [...(p.macs || [])];
+  const macList = el('div.dev-list');
+  const paintMacs = () => {
+    clear(macList);
+    if (!macs.length) {
+      macList.append(el('p.sheet-note', { text: 'No device linked — presence stays off for them.' }));
+    }
+    macs.forEach((mc, i) => macList.append(el('div.dev-row', {}, [
+      el('div.dev-main', {}, [el('div.dev-meta', { text: mc })]),
+      el('button.btn.btn-small', {
+        text: 'Remove', onclick: () => { macs.splice(i, 1); paintMacs(); },
+      }),
+    ])));
+  };
+  paintMacs();
+
+  const scanBtn = el('button.btn', {
+    text: 'Scan network for their phone',
+    onclick: async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true; btn.textContent = 'Scanning…';
+      try {
+        const hosts = await api.lanHosts();
+        const body = el('div', {}, [
+          el('p.sheet-note', {
+            text: 'Devices seen on the network right now. Phones show up when awake — if theirs is missing, unlock it and scan again.',
+          }),
+          ...hosts.map(h => el('div.dev-row', {}, [
+            el('div.dev-main', {}, [
+              el('div.dev-name', { text: h.mac }),
+              el('div.dev-meta', { text: h.ip + (h.claimed_by ? ` · already ${h.claimed_by}` : '') }),
+            ]),
+            el('button.btn.btn-small.btn-primary', {
+              text: 'This one', disabled: macs.includes(h.mac),
+              onclick: () => {
+                if (!macs.includes(h.mac)) macs.push(h.mac);
+                paintMacs();
+                close();
+                openPersonSheet();
+              },
+            }),
+          ])),
+        ]);
+        openSheet({ title: 'Pick their device', body, wide: true,
+                    actions: [{ label: 'Cancel', onClick: () => { close(); openPersonSheet(); } }] });
+      } catch (err) { toast(err.message, true); }
+      btn.disabled = false; btn.textContent = 'Scan network for their phone';
+    },
+  });
+
+  const themeNote = el('p.sheet-note', {
+    text: p.theme ? 'Using their own theme.' : 'Using the household theme.',
+  });
+
+  const body = el('div', {}, [
+    node,
+    el('h3.form-section', { text: 'Presence (optional)' }),
+    macList,
+    el('div.dev-actions', {}, [scanBtn]),
+    el('h3.form-section', { text: 'Theme' }),
+    themeNote,
+    el('div.dev-actions', {}, [
+      el('button.btn', {
+        text: 'Use the current theme for them',
+        onclick: async () => {
+          try {
+            await api.updatePerson(p.id, { theme: getTheme() });
+            p.theme = getTheme();
+            themeNote.textContent = 'Using their own theme.';
+            toast('Saved — switch to them to see it');
+          } catch (e) { toast(e.message, true); }
+        },
+      }),
+      p.theme ? el('button.btn', {
+        text: 'Clear', onclick: async () => {
+          try {
+            await api.updatePerson(p.id, { theme: null });
+            p.theme = null;
+            themeNote.textContent = 'Using the household theme.';
+          } catch (e) { toast(e.message, true); }
+        },
+      }) : null,
+    ]),
+  ]);
+
+  function openPersonSheet() {
+    openSheet({
+      title: `Edit ${p.name}`,
+      body, wide: true,
+      actions: [
+        {
+          label: 'Remove', kind: 'danger', onClick: () => {
+            close();
+            confirmSheet('Remove this person?',
+              `${p.name} disappears from the switcher. Any pages of theirs become shared — nothing is deleted.`,
+              async () => {
+                try { await api.deletePerson(p.id); } catch (e) { toast(e.message, true); }
+                if (state.activePerson === p.id) await setActivePerson('');
+                await reload();
+                openSettings('People');
+              });
+          },
+        },
+        { label: 'Cancel', onClick: () => { close(); openSettings('People'); } },
+        {
+          label: 'Save', kind: 'primary', onClick: async () => {
+            try {
+              await api.updatePerson(p.id, {
+                name: (values.name || p.name).trim(),
+                avatar: values.avatar || '',
+                greeting: values.greeting || '',
+                color: values.color || '',
+                macs,
+              });
+              close();
+              await reload();
+              openSettings('People');
+            } catch (e) { toast(e.message, true); }
+          },
+        },
+      ],
+    });
+  }
+  openPersonSheet();
 }
 
 /* Gallery sets: named folders of images on disk. Deleting a set (or a widget

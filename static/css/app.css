@@ -542,6 +542,39 @@ button.src-dot-btn:active { background-color: var(--surface-3); background-clip:
 .action-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 8px; align-items: center; }
 .action-num { color: var(--text-3); width: 18px; font-size: 13px; font-variant-numeric: tabular-nums; }
 
+/* ----------------------------------------------------------------- people */
+
+.greeting { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+.greeting-line { font-weight: 300; letter-spacing: -.02em; line-height: 1.1; }
+.greeting-sub { font-size: 13px; color: var(--text-3); margin-top: 8px; }
+
+.people-grid { flex: 1; min-height: 0; overflow-y: auto; display: grid; gap: 8px; align-content: start; }
+.person {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 12px 8px; min-height: 92px; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--r-card); color: var(--text);
+  transition: background .14s ease, border-color .14s ease;
+}
+.person:active { background: var(--surface-2); }
+.person.on { background: var(--surface-2); border-color: var(--c, var(--primary)); }
+.person-face {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 18px; font-weight: 550;
+  background: color-mix(in srgb, var(--c, var(--primary)) 22%, var(--surface-2));
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--c, var(--primary)) 45%, transparent);
+}
+.person-face-sm { width: 34px; height: 34px; font-size: 14px; flex: none; }
+.person-shared { background: var(--surface-2); border-color: var(--line); color: var(--text-3); }
+.person-name { font-size: 13px; font-weight: 500; text-align: center; }
+.person-home {
+  position: absolute; top: 10px; right: 10px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--good);
+}
+
 /* -------------------------------------------------------------- galleries */
 
 .gallery-box {

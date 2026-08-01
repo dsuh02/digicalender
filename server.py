@@ -431,10 +431,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"pages": store.list_pages()})
             if method == "POST":
                 b = self._body()
+                owner = str(b.get("person_id") or "") or None
+                if owner and not store.get_person(owner):
+                    raise ApiError(400, "person_id does not exist")
                 pid = store.create_page((b.get("name") or "Page").strip()[:60],
                                         _int(b, "position", 0, 100, 0),
                                         _int(b, "cols", 8, 200, 48),
-                                        _int(b, "rows", 8, 200, 32))
+                                        _int(b, "rows", 8, 200, 32),
+                                        owner)
                 return self._json(201, {"page": store.get_page(pid)})
             raise ApiError(405, "method not allowed")
 
@@ -449,6 +453,11 @@ class Handler(BaseHTTPRequestHandler):
                 for f, lo, hi in (("position", 0, 100), ("cols", 8, 200), ("rows", 8, 200)):
                     if f in b:
                         data[f] = _int(b, f, lo, hi)
+                if "person_id" in b:
+                    owner = str(b["person_id"] or "") or None
+                    if owner and not store.get_person(owner):
+                        raise ApiError(400, "person_id does not exist")
+                    data["person_id"] = owner
                 page = store.update_page(pid, data)
                 if not page:
                     raise ApiError(404, "page not found")
@@ -795,6 +804,89 @@ class Handler(BaseHTTPRequestHandler):
             if data is None:
                 raise ApiError(502, err)
             return self._json(200, {"weather": data, "notice": err})
+
+        # ---- household members
+        if path == "/api/people":
+            if method == "GET":
+                grace = hub.PRESENCE_GRACE_MIN * 60
+                now = datetime.now(timezone.utc)
+                out = []
+                for p in store.list_people():
+                    home = False
+                    if p.get("last_seen"):
+                        try:
+                            seen = datetime.strptime(p["last_seen"], "%Y-%m-%dT%H:%M:%SZ") \
+                                .replace(tzinfo=timezone.utc)
+                            home = (now - seen).total_seconds() <= grace
+                        except ValueError:
+                            home = False
+                    out.append({**p, "home": home})
+                return self._json(200, {"people": out})
+            if method == "POST":
+                b = self._body()
+                name = (b.get("name") or "").strip()
+                if not name:
+                    raise ApiError(400, "name is required")
+                p = store.create_person({
+                    "name": name[:60],
+                    "greeting": (b.get("greeting") or "")[:200],
+                    "color": (b.get("color") or "")[:20],
+                    "avatar": (b.get("avatar") or "")[:8],
+                    "macs": [str(m).lower().strip() for m in (b.get("macs") or [])][:10],
+                })
+                hub.bus.publish("people_changed", {})
+                return self._json(201, {"person": p})
+            raise ApiError(405, "method not allowed")
+
+        if path == "/api/people/order" and method == "POST":
+            ids = self._body().get("ids") or []
+            if not isinstance(ids, list):
+                raise ApiError(400, "ids must be a list")
+            n = store.reorder_people([str(i) for i in ids][:100])
+            hub.bus.publish("people_changed", {})
+            return self._json(200, {"updated": n})
+
+        # Every MAC currently visible on the LAN, so a person's device can be
+        # picked from a list instead of typed from memory.
+        if path == "/api/people/lan" and method == "GET":
+            from devices.discovery import _neighbour_macs, _sweep_arp
+            _sweep_arp()
+            known = {}
+            for p in store.list_people():
+                for m in (p.get("macs") or []):
+                    known[str(m).lower()] = p["name"]
+            return self._json(200, {"hosts": [
+                {"ip": ip, "mac": mac, "claimed_by": known.get(mac)}
+                for ip, mac in sorted(_neighbour_macs(), key=lambda t: t[0])
+            ]})
+
+        m = re.fullmatch(rf"/api/people/{ID_RE}", path)
+        if m:
+            pid = m.group(1)
+            if not store.get_person(pid):
+                raise ApiError(404, "person not found")
+            if method == "PATCH":
+                b = self._body()
+                data = {}
+                for f, cap in (("name", 60), ("greeting", 200), ("color", 20), ("avatar", 8)):
+                    if f in b:
+                        data[f] = str(b[f] or "")[:cap]
+                if "macs" in b:
+                    if not isinstance(b["macs"], list):
+                        raise ApiError(400, "macs must be a list")
+                    data["macs"] = [str(x).lower().strip() for x in b["macs"]][:10]
+                if "theme" in b:
+                    data["theme"] = b["theme"] if isinstance(b["theme"], dict) else None
+                p = store.update_person(pid, data)
+                hub.bus.publish("people_changed", {})
+                return self._json(200, {"person": p})
+            if method == "DELETE":
+                store.delete_person(pid)
+                hub.bus.publish("people_changed", {})
+                hub.bus.publish("layout_changed", {})
+                return self._json(200, {"ok": True,
+                                        "note": "their pages are now shared"})
+            raise ApiError(405, "method not allowed")
 
         # ---- galleries
         if path == "/api/galleries":

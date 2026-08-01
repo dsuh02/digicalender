@@ -601,6 +601,9 @@ button.src-dot-btn:active { background-color: var(--surface-3); background-clip:
   cursor: none;
 }
 
+.star-btn { min-width: 46px; font-size: 16px; line-height: 1; }
+.star-btn.on { color: var(--tertiary); border-color: var(--tertiary); }
+
 .gset-cover {
   width: 52px; height: 40px; flex: none;
   object-fit: cover; border-radius: 6px;

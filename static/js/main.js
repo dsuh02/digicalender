@@ -56,12 +56,23 @@ async function boot() {
   dom.editBtn = document.getElementById('editBtn');
   dom.addBtn = document.getElementById('addBtn');
   dom.settingsBtn = document.getElementById('settingsBtn');
+  dom.reloadBtn = document.getElementById('reloadBtn');
   dom.status = document.getElementById('status');
   dom.pageBtn = document.getElementById('pageBtn');
 
   dom.editBtn.addEventListener('click', toggleEdit);
   dom.addBtn.addEventListener('click', openPalette);
   dom.settingsBtn.addEventListener('click', () => openSettings());
+  // Cache-busted so a reload can never re-serve the bundle it is trying to
+  // escape — this button exists precisely for when something looks wrong.
+  dom.reloadBtn.addEventListener('click', () => {
+    toast('Reloading…');
+    setTimeout(() => {
+      const u = new URL(location.href);
+      u.searchParams.set('r', Date.now().toString(36));
+      location.replace(u.toString());
+    }, 150);
+  });
   dom.pageBtn.addEventListener('click', openPageManager);
   window._openSettings = openSettings;   // calendar widgets jump to the Calendars tab
   window._activePerson = () => state.activePerson;   // people widgets read/switch
@@ -85,6 +96,7 @@ async function boot() {
   initIdleDim();
   initTouchFeedback();
   initScrollbars();
+  initFourFingerTap();
 }
 
 async function reload() {
@@ -280,6 +292,13 @@ function initPager() {
 
   dom.stage.addEventListener('pointerdown', e => {
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    // A three- or four-finger gesture passes through "two" on its way down;
+    // abandon the page drag rather than letting the track lurch sideways.
+    if (pts.size > 2 && drag) {
+      drag = null;
+      dom.pager.classList.remove('dragging');
+      setPage(state.pageIndex, true);
+    }
     // Two fingers anywhere on the stage picks the track up — like a tablet.
     if (pts.size === 2 && !state.editing && !drag) {
       drag = {
@@ -1085,14 +1104,29 @@ async function renderGalleries() {
     }));
   }
   sets.forEach((g, i) => {
+    const starred = state.settings.starred_gallery === g.id
+      || (!state.settings.starred_gallery && i === 0);
     list.append(el('div.dev-row', {}, [
       g.cover_id
         ? el('img.gset-cover', { src: api.imageUrl(g.cover_id), alt: '' })
         : el('span.gset-cover.gset-cover-empty', {}, [icon('image', 20)]),
       el('div.dev-main', {}, [
         el('div.dev-name', { text: g.name }),
-        el('div.dev-meta', { text: `${g.image_count} image${g.image_count === 1 ? '' : 's'} · galleries/${g.dirname}/` }),
+        el('div.dev-meta', {
+          text: `${g.image_count} image${g.image_count === 1 ? '' : 's'} · galleries/${g.dirname}/`
+                + (starred ? ' · four-finger double tap plays this' : ''),
+        }),
       ]),
+      el('button.btn.btn-small.star-btn' + (starred ? '.on' : ''), {
+        text: starred ? '★' : '☆', title: 'Play this on a four-finger double tap',
+        onclick: async () => {
+          try {
+            state.settings = await api.saveSettings({ starred_gallery: g.id });
+            toast(`★ ${g.name} — four-finger double tap plays it`);
+          } catch (e) { toast(e.message, true); }
+          openSettings('Galleries');
+        },
+      }),
       el('button.btn.btn-small', {
         text: '▲', 'aria-label': 'Move up', disabled: i === 0,
         onclick: async () => {
@@ -1615,6 +1649,62 @@ function initIdleDim() {
   }
   setInterval(tickIdle, 10000);
   window._idle = { state: idle, tick: tickIdle };    // reachable for testing
+}
+
+/* ---------------------------------------------------------- four-finger tap */
+
+/** The starred set, or the first one if none is starred yet. */
+async function playStarredGallery() {
+  let sets = [];
+  try { sets = await api.galleries(); } catch { sets = []; }
+  if (!sets.length) return toast('No gallery sets yet — add one in Settings › Galleries', true);
+  const starred = state.settings.starred_gallery;
+  const pick = sets.find(s => s.id === starred) || sets[0];
+  const { startScreensaver } = await import('./widgets/gallery.js');
+  startScreensaver(pick.id, { interval: 20, fit: 'contain' });
+}
+
+/**
+ * Four fingers, tapped twice, anywhere — plays the starred gallery.
+ *
+ * Counts the PEAK number of simultaneous touches per gesture rather than the
+ * count at any instant: four fingers never land or lift together, so an
+ * exact-match test would almost never fire. A gesture ends when the last
+ * finger lifts; two qualifying gestures inside the window trigger.
+ */
+function initFourFingerTap() {
+  const down = new Set();
+  let peak = 0;
+  let lastTap = 0;
+  const WINDOW_MS = 700;
+
+  document.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch') return;
+    // On a dimmed screen the first touch is a wake, not a gesture.
+    if (!document.getElementById('wakeCatch').hidden) return;
+    down.add(e.pointerId);
+    peak = Math.max(peak, down.size);
+  }, true);
+
+  const lift = e => {
+    if (e.pointerType !== 'touch' || !down.has(e.pointerId)) return;
+    down.delete(e.pointerId);
+    if (down.size) return;                       // still mid-gesture
+    const wasFour = peak >= 4;
+    peak = 0;
+    if (!wasFour) { lastTap = 0; return; }       // a non-four gesture breaks the pair
+    const now = Date.now();
+    if (now - lastTap < WINDOW_MS) {
+      lastTap = 0;
+      playStarredGallery();
+    } else {
+      lastTap = now;
+    }
+  };
+  document.addEventListener('pointerup', lift, true);
+  document.addEventListener('pointercancel', lift, true);
+
+  window._fourFinger = { play: playStarredGallery };   // reachable for testing
 }
 
 /* -------------------------------------------------------------- scrollbars */

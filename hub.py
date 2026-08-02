@@ -232,6 +232,26 @@ def _presence_loop(stop: threading.Event) -> None:
         stop.wait(PRESENCE_INTERVAL)
 
 
+FINANCE_INTERVAL = 6 * 3600.0     # balances move slowly; Plaid calls are metered
+
+
+def _finance_loop(stop: threading.Event) -> None:
+    import finance
+    stop.wait(60)
+    while not stop.is_set():
+        try:
+            if store.list_finance_items():
+                finance.sync_all()
+                bus.publish("finance_changed", {})
+            # Bills regenerate regardless — a manual account with a due day
+            # still needs next month's date to appear as the month turns over.
+            if finance.sync_bill_events():
+                bus.publish("events_changed", {})
+        except Exception:
+            pass
+        stop.wait(FINANCE_INTERVAL)
+
+
 def _feed_loop(stop: threading.Event) -> None:
     """Keep calendar subscriptions fresh. First run happens shortly after boot
     so a restart never shows stale meetings for 15 minutes."""
@@ -257,7 +277,8 @@ def start() -> None:
     for fn, name in ((_device_loop, "device-poller"),
                      (_reminder_loop, "reminder-ticker"),
                      (_feed_loop, "feed-sync"),
-                     (_presence_loop, "presence")):
+                     (_presence_loop, "presence"),
+                     (_finance_loop, "finance-sync")):
         t = threading.Thread(target=fn, args=(_stop,), name=name, daemon=True)
         t.start()
         _threads.append(t)

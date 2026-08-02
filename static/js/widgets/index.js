@@ -2,6 +2,7 @@
  * settings panel built from its schema, and can be placed on any page. */
 
 import { AgendaWidget, DayWidget, MonthWidget, WeekWidget } from './calendar.js';
+import { AccountsWidget, BillsWidget, NetWorthWidget } from './finance.js';
 import { GalleryWidget } from './gallery.js';
 import { DeviceGridWidget, MediaWidget, RokuRemoteWidget, ScenesWidget } from './home.js';
 import { ClockWidget, LabelWidget, WeatherWidget } from './info.js';
@@ -12,6 +13,7 @@ export const WIDGETS = [
   MonthWidget, WeekWidget, DayWidget, AgendaWidget,
   ClockWidget, GreetingWidget, WeatherWidget, LabelWidget, GalleryWidget, PeopleWidget,
   TodoWidget, NotificationsWidget,
+  NetWorthWidget, AccountsWidget, BillsWidget,
   DeviceGridWidget, ScenesWidget, RokuRemoteWidget, MediaWidget,
 ];
 

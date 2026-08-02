@@ -82,6 +82,17 @@ export const api = {
 
   display: on => req('/api/display', { method: 'POST', body: JSON.stringify({ on }) }),
 
+  // money
+  finance: () => req('/api/finance'),
+  netWorthSeries: (days = 180) => req(`/api/finance/networth?days=${days}`).then(r => r.series),
+  syncFinance: () => req('/api/finance/sync', { method: 'POST' }),
+  startLink: () => req('/api/finance/link', { method: 'POST' }),
+  pollLink: link_token => req('/api/finance/link/poll', { method: 'POST', body: JSON.stringify({ link_token }) }),
+  deleteFinanceItem: id => req(`/api/finance/items/${id}`, { method: 'DELETE' }),
+  createFinanceAccount: d => req('/api/finance/accounts', { method: 'POST', body: JSON.stringify(d) }).then(r => r.account),
+  updateFinanceAccount: (id, d) => req(`/api/finance/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.account),
+  deleteFinanceAccount: id => req(`/api/finance/accounts/${id}`, { method: 'DELETE' }),
+
   // household members
   people: () => req('/api/people').then(r => r.people),
   createPerson: d => req('/api/people', { method: 'POST', body: JSON.stringify(d) }).then(r => r.person),
@@ -160,7 +171,7 @@ export function connectStream() {
     });
     for (const name of ['events_changed', 'todos_changed', 'notification',
                         'layout_changed', 'devices_changed', 'galleries_changed',
-                        'people_changed']) {
+                        'people_changed', 'finance_changed']) {
       es.addEventListener(name, e => bus.emit(name, JSON.parse(e.data || '{}')));
     }
 

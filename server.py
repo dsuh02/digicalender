@@ -25,8 +25,10 @@ from urllib.parse import parse_qs, urlparse
 
 import devices as device_registry
 import feeds
+import finance
 import hub
 import ics
+import plaid
 import providers
 import store
 import weather
@@ -804,6 +806,148 @@ class Handler(BaseHTTPRequestHandler):
             if data is None:
                 raise ApiError(502, err)
             return self._json(200, {"weather": data, "notice": err})
+
+        # ---- money
+        if path == "/api/finance":
+            if method == "GET":
+                return self._json(200, {
+                    "accounts": store.list_finance_accounts(),
+                    "items": [{k: v for k, v in it.items() if k != "access_token"}
+                              for it in store.list_finance_items()],
+                    "summary": finance.summary(),
+                    "configured": bool((store.get_setting("plaid_client_id") or "").strip()
+                                       and (store.get_setting("plaid_secret") or "").strip()),
+                    "env": plaid.env_name(),
+                })
+            raise ApiError(405, "method not allowed")
+
+        if path == "/api/finance/networth" and method == "GET":
+            try:
+                days = min(int((qs.get("days") or ["180"])[0] or 180), 1095)
+            except ValueError:
+                days = 180
+            return self._json(200, {"series": store.finance_networth_series(days)})
+
+        if path == "/api/finance/sync" and method == "POST":
+            results = finance.sync_all()
+            n = finance.sync_bill_events()
+            hub.bus.publish("finance_changed", {})
+            hub.bus.publish("events_changed", {})
+            return self._json(200, {"results": results, "bill_events": n})
+
+        # Plaid Hosted Link: create a session, hand back a URL the user opens
+        # on a device that has a keyboard.
+        if path == "/api/finance/link" and method == "POST":
+            try:
+                d = plaid.create_hosted_link(user_id="digicalender-household")
+            except plaid.PlaidError as e:
+                raise ApiError(400, e.message + (f" [{e.code}]" if e.code else ""))
+            url = d.get("hosted_link_url") or ""
+            if not url:
+                raise ApiError(502, "Plaid did not return a hosted link URL — check that "
+                                    "Hosted Link is enabled for your Plaid account.")
+            return self._json(200, {"link_token": d.get("link_token"), "url": url,
+                                    "expiration": d.get("expiration")})
+
+        # Polled by the UI while the user completes the flow elsewhere.
+        if path == "/api/finance/link/poll" and method == "POST":
+            token = str(self._body().get("link_token") or "")
+            if not token:
+                raise ApiError(400, "link_token is required")
+            try:
+                res = plaid.get_link_results(token)
+            except plaid.PlaidError as e:
+                raise ApiError(400, e.message)
+            public_token, inst = plaid.public_token_from_results(res)
+            if not public_token:
+                return self._json(200, {"ready": False})
+            try:
+                ex = plaid.exchange(public_token)
+            except plaid.PlaidError as e:
+                raise ApiError(400, e.message)
+            item = store.create_finance_item({
+                "item_id": ex.get("item_id"), "access_token": ex.get("access_token"),
+                "institution": inst,
+            })
+            out = finance.sync_item(store.get_finance_item(item["id"]))
+            finance.sync_bill_events()
+            hub.bus.publish("finance_changed", {})
+            hub.bus.publish("events_changed", {})
+            return self._json(200, {"ready": True, "item": {"id": item["id"],
+                                                            "institution": out.get("institution") or inst},
+                                    "sync": out})
+
+        m = re.fullmatch(rf"/api/finance/items/{ID_RE}", path)
+        if m and method == "DELETE":
+            it = store.get_finance_item(m.group(1))
+            if not it:
+                raise ApiError(404, "item not found")
+            try:
+                if it.get("access_token"):
+                    plaid.item_remove(it["access_token"])   # revoke at Plaid too
+            except plaid.PlaidError:
+                pass                                        # local removal still proceeds
+            store.delete_finance_item(it["id"])
+            finance.sync_bill_events()
+            hub.bus.publish("finance_changed", {})
+            hub.bus.publish("events_changed", {})
+            return self._json(200, {"ok": True})
+
+        if path == "/api/finance/accounts" and method == "POST":
+            b = self._body()
+            name = (b.get("name") or "").strip()
+            if not name:
+                raise ApiError(400, "name is required")
+            a = store.create_finance_account({
+                "name": name[:80],
+                "institution": (b.get("institution") or "")[:80],
+                "kind": (b.get("kind") or "other")[:20],
+                "balance": float(b.get("balance") or 0),
+                "credit_limit": b.get("credit_limit"),
+                "apr": b.get("apr"),
+                "min_payment": b.get("min_payment"),
+                "due_day": _int(b, "due_day", 1, 31) if b.get("due_day") else None,
+                "color": (b.get("color") or "")[:20],
+            })
+            finance.sync_bill_events()
+            hub.bus.publish("finance_changed", {})
+            hub.bus.publish("events_changed", {})
+            return self._json(201, {"account": a})
+
+        m = re.fullmatch(rf"/api/finance/accounts/{ID_RE}", path)
+        if m:
+            aid = m.group(1)
+            acct = store.get_finance_account(aid)
+            if not acct:
+                raise ApiError(404, "account not found")
+            if method == "GET":
+                return self._json(200, {"account": acct,
+                                        "history": store.finance_history(aid)})
+            if method == "PATCH":
+                b = self._body()
+                data = {}
+                for f, cap in (("name", 80), ("institution", 80), ("kind", 20), ("color", 20)):
+                    if f in b:
+                        data[f] = str(b[f] or "")[:cap]
+                for f in ("balance", "credit_limit", "apr", "min_payment"):
+                    if f in b:
+                        data[f] = float(b[f]) if b[f] not in (None, "") else None
+                if "due_day" in b:
+                    data["due_day"] = _int(b, "due_day", 1, 31) if b["due_day"] else None
+                if "hidden" in b:
+                    data["hidden"] = bool(b["hidden"])
+                a = store.update_finance_account(aid, data)
+                finance.sync_bill_events()
+                hub.bus.publish("finance_changed", {})
+                hub.bus.publish("events_changed", {})
+                return self._json(200, {"account": a})
+            if method == "DELETE":
+                store.delete_finance_account(aid)
+                finance.sync_bill_events()
+                hub.bus.publish("finance_changed", {})
+                hub.bus.publish("events_changed", {})
+                return self._json(200, {"ok": True})
+            raise ApiError(405, "method not allowed")
 
         # ---- household members
         if path == "/api/people":

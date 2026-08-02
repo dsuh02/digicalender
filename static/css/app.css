@@ -542,6 +542,64 @@ button.src-dot-btn:active { background-color: var(--surface-3); background-clip:
 .action-row { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 8px; align-items: center; }
 .action-num { color: var(--text-3); width: 18px; font-size: 13px; font-variant-numeric: tabular-nums; }
 
+/* ------------------------------------------------------------------ money */
+
+.fin-list { flex: 1; min-height: 0; overflow-y: auto; touch-action: pan-y;
+            display: flex; flex-direction: column; }
+.fin-group {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin: 12px 0 4px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px; font-weight: 600; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--text-3);
+}
+.fin-group:first-child { margin-top: 0; }
+.fin-group-total { letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.fin-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.fin-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--primary); }
+.fin-main { flex: 1; min-width: 0; }
+.fin-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fin-meta { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.fin-amt {
+  font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap;
+  color: var(--text);
+}
+.fin-amt.debt { color: var(--warn); }
+
+.bill-when {
+  min-width: 52px; text-align: center; flex: none;
+  font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-2);
+  border-right: 1px solid var(--line); padding-right: 10px;
+}
+.bill-when.soon { color: var(--danger); font-weight: 600; }
+
+.networth { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.nw-label { font-size: 11px; font-weight: 600; letter-spacing: .09em;
+            text-transform: uppercase; color: var(--text-3); }
+.nw-value {
+  font-size: clamp(26px, 5.5vh, 46px); font-weight: 300; letter-spacing: -.02em;
+  line-height: 1.1; margin-top: 4px; font-variant-numeric: tabular-nums;
+}
+.nw-change { font-size: 12px; color: var(--good); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.nw-change.down { color: var(--warn); }
+.spark { width: 100%; height: 46px; margin: 10px 0 4px; flex: none; overflow: visible; }
+.spark-line { fill: none; stroke: var(--primary); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.spark-fill { fill: color-mix(in srgb, var(--primary) 12%, transparent); stroke: none; }
+.nw-split { display: flex; gap: 24px; margin-top: auto; padding-top: 8px; }
+.nw-split-k { font-size: 11px; color: var(--text-3); }
+.nw-split-v { font-size: 15px; font-variant-numeric: tabular-nums; }
+.nw-split-v.debt { color: var(--warn); }
+
+.link-url {
+  display: block; margin: 8px 0; padding: 10px 12px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);
+  color: var(--primary); font-size: 13px; word-break: break-all;
+  -webkit-user-select: text; user-select: text;
+}
+
 /* ----------------------------------------------------------------- people */
 
 .greeting { flex: 1; display: flex; flex-direction: column; justify-content: center; }

@@ -616,8 +616,9 @@ async function openSettings(initialTab = 'Theme') {
   body.append(tabs, panel);
 
   const views = { Theme: renderThemeTab, People: renderPeople,
-                  Calendars: renderCalendars, Galleries: renderGalleries,
-                  Devices: renderDevices, Display: renderDisplay };
+                  Calendars: renderCalendars, Money: renderMoney,
+                  Galleries: renderGalleries, Devices: renderDevices,
+                  Display: renderDisplay };
   let active = views[initialTab] ? initialTab : 'Theme';
   const paint = async () => {
     clear(tabs);
@@ -874,6 +875,249 @@ async function editFeed(feed, feedCount = 0) {
     },
   });
   openSheet({ title: isNew ? 'Add calendar' : 'Edit calendar', body: node, actions });
+}
+
+/* Money: Plaid-linked institutions plus anything typed by hand. */
+async function renderMoney() {
+  const wrap = el('div');
+  let data = { accounts: [], items: [], summary: null, configured: false, env: 'sandbox' };
+  try { data = await api.finance(); } catch (e) { return el('p.sheet-note', { text: e.message }); }
+
+  const linked = el('div.dev-list');
+  const paintLinked = () => {
+    clear(linked);
+    if (!data.items.length) {
+      linked.append(el('p.sheet-note', { text: 'No institutions linked yet.' }));
+    }
+    data.items.forEach(it => {
+      const n = data.accounts.filter(a => a.item_id === it.id).length;
+      linked.append(el('div.dev-row', {}, [
+        el('div.dev-main', {}, [
+          el('div.dev-name', { text: it.institution || 'Institution' }),
+          el('div.dev-meta', {
+            text: `${n} account${n === 1 ? '' : 's'} · ${it.status || 'not synced yet'}`,
+          }),
+        ]),
+        el('button.btn.btn-small', {
+          text: 'Unlink', onclick: () => {
+            close();
+            confirmSheet('Unlink this institution?',
+              `Its accounts disappear from the panel and access is revoked at Plaid. Anything you typed by hand is untouched.`,
+              async () => {
+                try { await api.deleteFinanceItem(it.id); } catch (e) { toast(e.message, true); }
+                openSettings('Money');
+              });
+          },
+        }),
+      ]));
+    });
+  };
+  paintLinked();
+
+  const accountList = el('div.dev-list');
+  const paintAccounts = () => {
+    clear(accountList);
+    if (!data.accounts.length) {
+      accountList.append(el('p.sheet-note', { text: 'No accounts yet.' }));
+    }
+    data.accounts.forEach(a => accountList.append(el('div.dev-row', {}, [
+      el('span.fin-dot', { style: a.color ? { backgroundColor: a.color } : {} }),
+      el('div.dev-main', {}, [
+        el('div.dev-name', { text: a.name + (a.hidden ? '  (hidden)' : '') }),
+        el('div.dev-meta', {
+          text: [a.kind, a.institution || null, a.item_id ? 'via Plaid' : 'manual',
+                 a.due_day ? `due ${a.due_day}` : null].filter(Boolean).join(' · '),
+        }),
+      ]),
+      el('div.fin-amt', { text: moneyFmt(a.balance) }),
+      el('button.btn.btn-small', { text: 'Edit', onclick: () => editFinanceAccount(a) }),
+    ])));
+  };
+  paintAccounts();
+
+  // Plaid credentials. The client secret is a bearer credential; it lives in
+  // the local database and is only ever sent to Plaid.
+  const cid = el('input.input', { type: 'text', placeholder: 'Plaid client_id',
+                                  value: state.settings.plaid_client_id || '' });
+  const sec = el('input.input', { type: 'password', placeholder: 'Plaid secret',
+                                  value: state.settings.plaid_secret || '' });
+  const envSel = el('select.input');
+  [['sandbox', 'Sandbox — fake data, works instantly'],
+   ['production', 'Production — real banks (needs Plaid approval)']].forEach(([v, l]) => {
+    const o = el('option', { value: v, text: l });
+    if ((state.settings.plaid_env || 'sandbox') === v) o.selected = true;
+    envSel.append(o);
+  });
+
+  const linkStatus = el('p.sheet-note');
+  let polling = null;
+
+  const startLink = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    clearInterval(polling);
+    linkStatus.textContent = 'Asking Plaid for a link session…';
+    let session;
+    try { session = await api.startLink(); }
+    catch (err) { linkStatus.textContent = err.message; btn.disabled = false; return; }
+
+    clear(linkStatus);
+    linkStatus.append(
+      el('div', { text: 'Open this on a phone or laptop — the panel has no keyboard:' }),
+      el('a.link-url', { href: session.url, target: '_blank', rel: 'noreferrer', text: session.url }),
+      el('div.field-help', { text: 'Waiting for you to finish… this page updates by itself.' }),
+    );
+
+    const started = Date.now();
+    polling = setInterval(async () => {
+      if (Date.now() - started > 15 * 60000) {       // Link tokens expire
+        clearInterval(polling);
+        linkStatus.textContent = 'That link session expired — start another.';
+        btn.disabled = false;
+        return;
+      }
+      try {
+        const r = await api.pollLink(session.link_token);
+        if (r.ready) {
+          clearInterval(polling);
+          toast(`Linked ${r.item.institution || 'institution'} — ${r.sync.message}`);
+          openSettings('Money');
+        }
+      } catch { /* keep polling; transient errors are normal mid-flow */ }
+    }, 3000);
+  };
+
+  wrap.append(
+    el('h3.form-section', { text: 'Linked institutions' }),
+    linked,
+    el('div.dev-actions', {}, [
+      el('button.btn.btn-primary', {
+        text: '+ Link an institution', disabled: !data.configured, onclick: startLink,
+      }),
+      el('button.btn', {
+        text: 'Sync now', disabled: !data.items.length,
+        onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          try { const r = await api.syncFinance(); toast(`Synced · ${r.bill_events} bill dates`); }
+          catch (err) { toast(err.message, true); }
+          openSettings('Money');
+        },
+      }),
+    ]),
+    linkStatus,
+    !data.configured ? el('p.sheet-note.warn', {
+      text: 'Add your Plaid credentials below first.',
+    }) : null,
+
+    el('h3.form-section', { text: 'Accounts' }),
+    accountList,
+    el('div.dev-actions', {}, [
+      el('button.btn', { text: '+ Add a manual account', onclick: () => editFinanceAccount(null) }),
+    ]),
+    el('p.sheet-note', {
+      text: 'Add anything Plaid can’t reach by hand — balances you type are tracked over time the same way, and a due day puts it on the calendar.',
+    }),
+
+    el('h3.form-section', { text: 'Plaid credentials' }),
+    el('label.field', {}, [el('span.field-label', { text: 'Client ID' }), cid]),
+    el('label.field', {}, [el('span.field-label', { text: 'Secret' }), sec]),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'Environment' }), envSel,
+      el('span.field-help', {
+        text: 'Sandbox works the moment you sign up — use user_good / pass_good to test. Production needs Plaid to approve your account.',
+      }),
+    ]),
+    el('div.dev-actions', {}, [
+      el('button.btn.btn-primary', {
+        text: 'Save credentials',
+        onclick: async () => {
+          try {
+            state.settings = await api.saveSettings({
+              plaid_client_id: cid.value.trim(),
+              plaid_secret: sec.value.trim(),
+              plaid_env: envSel.value,
+            });
+            toast('Saved');
+            openSettings('Money');
+          } catch (e) { toast(e.message, true); }
+        },
+      }),
+    ]),
+    el('p.sheet-note', {
+      text: 'Credentials and Plaid access tokens are stored in this machine’s local database and are only ever sent to Plaid.',
+    }),
+  );
+  return wrap;
+}
+
+function moneyFmt(n) {
+  return Number(n || 0).toLocaleString(undefined,
+    { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+}
+
+async function editFinanceAccount(a) {
+  const isNew = !a;
+  const KINDS = [['checking', 'Checking'], ['savings', 'Savings / HYSA'],
+                 ['credit', 'Credit card'], ['loan', 'Loan'],
+                 ['investment', 'Investment'], ['retirement', 'Retirement (401k / IRA)'],
+                 ['other', 'Other']];
+  const { node, values } = await buildForm([
+    { key: 'name', label: 'Name', type: 'text', placeholder: 'Ally HYSA' },
+    { key: 'institution', label: 'Institution', type: 'text' },
+    { key: 'kind', label: 'Type', type: 'select', default: 'savings',
+      options: KINDS.map(([v, l]) => ({ value: v, label: l })) },
+    { key: 'balance', label: 'Balance', type: 'number', step: '0.01',
+      help: a?.item_id ? 'Synced from Plaid — editing here will be overwritten on the next sync'
+                       : 'Enter debts as a positive number; the panel shows them as owed' },
+    { key: 'due_day', label: 'Payment due day of month', type: 'number', min: 0, max: 31,
+      help: 'Cards and loans only. Puts a due date on the calendar. 0 = none.' },
+    { key: 'min_payment', label: 'Minimum payment', type: 'number', step: '0.01' },
+    { key: 'apr', label: 'APR %', type: 'number', step: '0.01' },
+    { key: 'color', label: 'Colour', type: 'color' },
+  ], a ? { name: a.name, institution: a.institution, kind: a.kind, balance: a.balance,
+           due_day: a.due_day || 0, min_payment: a.min_payment || '', apr: a.apr || '',
+           color: a.color } : { kind: 'savings', balance: 0, due_day: 0 });
+
+  const actions = [];
+  if (!isNew) {
+    actions.push({
+      label: 'Delete', kind: 'danger', onClick: () => {
+        close();
+        confirmSheet('Delete this account?',
+          a.item_id
+            ? `“${a.name}” comes from Plaid and will reappear on the next sync — unlink the institution instead if you want it gone.`
+            : `“${a.name}” and its balance history are removed.`,
+          async () => {
+            try { await api.deleteFinanceAccount(a.id); } catch (e) { toast(e.message, true); }
+            openSettings('Money');
+          });
+      },
+    });
+  }
+  actions.push({ label: 'Cancel', onClick: () => { close(); openSettings('Money'); } });
+  actions.push({
+    label: 'Save', kind: 'primary', onClick: async () => {
+      const payload = {
+        name: (values.name || '').trim(),
+        institution: values.institution || '',
+        kind: values.kind || 'savings',
+        balance: Number(values.balance || 0),
+        due_day: Number(values.due_day || 0) || null,
+        min_payment: values.min_payment === '' ? null : Number(values.min_payment),
+        apr: values.apr === '' ? null : Number(values.apr),
+        color: values.color || '',
+      };
+      if (!payload.name) return toast('Give the account a name', true);
+      try {
+        if (isNew) await api.createFinanceAccount(payload);
+        else await api.updateFinanceAccount(a.id, payload);
+        close();
+        openSettings('Money');
+      } catch (e) { toast(e.message, true); }
+    },
+  });
+
+  openSheet({ title: isNew ? 'Add account' : `Edit ${a.name}`, body: node, actions });
 }
 
 /* Household members: a greeting, a look, and pages of their own. */

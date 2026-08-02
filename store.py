@@ -174,6 +174,57 @@ CREATE TABLE IF NOT EXISTS devices (
     created_at TEXT NOT NULL
 );
 
+-- One row per linked institution (a Plaid Item). access_token is a bearer
+-- credential: this database is peer-auth and local-only, and it never leaves
+-- the box except in calls to Plaid.
+CREATE TABLE IF NOT EXISTS finance_items (
+    id           TEXT PRIMARY KEY,
+    provider     TEXT NOT NULL DEFAULT 'plaid',
+    item_id      TEXT,
+    access_token TEXT,
+    institution  TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT '',
+    last_sync    TEXT,
+    created_at   TEXT NOT NULL
+);
+
+-- Balances are DOUBLE PRECISION, not NUMERIC: this is a display surface, and
+-- floats keep the JSON boundary free of Decimal special-casing. Do not do
+-- arithmetic here you would want to reconcile against a statement.
+CREATE TABLE IF NOT EXISTS finance_accounts (
+    id            TEXT PRIMARY KEY,
+    item_id       TEXT REFERENCES finance_items(id) ON DELETE CASCADE,
+    external_id   TEXT,
+    name          TEXT NOT NULL,
+    official_name TEXT NOT NULL DEFAULT '',
+    institution   TEXT NOT NULL DEFAULT '',
+    kind          TEXT NOT NULL DEFAULT 'other',
+    subtype       TEXT NOT NULL DEFAULT '',
+    mask          TEXT NOT NULL DEFAULT '',
+    balance       DOUBLE PRECISION NOT NULL DEFAULT 0,
+    available     DOUBLE PRECISION,
+    credit_limit  DOUBLE PRECISION,
+    apr           DOUBLE PRECISION,
+    min_payment   DOUBLE PRECISION,
+    due_day       INTEGER,
+    next_due      TEXT,
+    color         TEXT NOT NULL DEFAULT '',
+    hidden        BOOLEAN NOT NULL DEFAULT FALSE,
+    position      INTEGER NOT NULL DEFAULT 0,
+    updated_at    TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_facct_external
+    ON finance_accounts(item_id, external_id) WHERE external_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS finance_history (
+    id         TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES finance_accounts(id) ON DELETE CASCADE,
+    balance    DOUBLE PRECISION NOT NULL,
+    at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fhist ON finance_history(account_id, at);
+
 -- Gallery sets: one row per set, one folder per set under galleries/ on disk.
 -- The DB stores names + order; the FILES are the user's and outlive both the
 -- widgets showing them and (deliberately) the set row itself.
@@ -253,7 +304,7 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def init_db() -> None:
@@ -278,6 +329,9 @@ def init_db() -> None:
         q("""ALTER TABLE pages ADD COLUMN IF NOT EXISTS person_id TEXT
              REFERENCES people(id) ON DELETE SET NULL""")
         q("UPDATE schema_version SET version = 5")
+    if row["version"] < 6:
+        # v6: finance tables — created by SCHEMA above; only the version moves.
+        q("UPDATE schema_version SET version = 6")
 
 
 # --------------------------------------------------------------------- events
@@ -723,6 +777,149 @@ def update_scene(sid: str, data: dict) -> dict | None:
 
 def delete_scene(sid: str) -> bool:
     return q("DELETE FROM scenes WHERE id = %s", (sid,)) > 0
+
+
+# ----------------------------------------------------------------- finance
+
+def list_finance_items() -> list[dict]:
+    return q("SELECT * FROM finance_items ORDER BY created_at", fetch="all")
+
+
+def get_finance_item(iid: str) -> dict | None:
+    return q("SELECT * FROM finance_items WHERE id = %s", (iid,), fetch="one")
+
+
+def create_finance_item(data: dict) -> dict:
+    iid = new_uid()
+    q("""INSERT INTO finance_items (id, provider, item_id, access_token,
+             institution, status, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+      (iid, data.get("provider", "plaid"), data.get("item_id"),
+       data.get("access_token"), data.get("institution", "") or "",
+       data.get("status", "") or "", now_iso()))
+    return get_finance_item(iid)
+
+
+def update_finance_item(iid: str, data: dict) -> dict | None:
+    sets, vals = [], []
+    for f in ("institution", "status", "last_sync", "access_token", "item_id"):
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    if not sets:
+        return get_finance_item(iid)
+    vals.append(iid)
+    q(f"UPDATE finance_items SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_finance_item(iid)
+
+
+def delete_finance_item(iid: str) -> bool:
+    return q("DELETE FROM finance_items WHERE id = %s", (iid,)) > 0
+
+
+def list_finance_accounts(include_hidden: bool = True) -> list[dict]:
+    sql = "SELECT * FROM finance_accounts"
+    if not include_hidden:
+        sql += " WHERE hidden = FALSE"
+    return q(sql + " ORDER BY position, institution, name", fetch="all")
+
+
+def get_finance_account(aid: str) -> dict | None:
+    return q("SELECT * FROM finance_accounts WHERE id = %s", (aid,), fetch="one")
+
+
+def find_finance_account(item_id: str, external_id: str) -> dict | None:
+    return q("""SELECT * FROM finance_accounts
+                WHERE item_id = %s AND external_id = %s""",
+             (item_id, external_id), fetch="one")
+
+
+FINANCE_FIELDS = ("name", "official_name", "institution", "kind", "subtype", "mask",
+                  "balance", "available", "credit_limit", "apr", "min_payment",
+                  "due_day", "next_due", "color", "position")
+
+
+def create_finance_account(data: dict) -> dict:
+    aid = new_uid()
+    ts = now_iso()
+    q("""INSERT INTO finance_accounts (id, item_id, external_id, name, official_name,
+             institution, kind, subtype, mask, balance, available, credit_limit,
+             apr, min_payment, due_day, next_due, color, hidden, position,
+             updated_at, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,FALSE,%s,%s,%s)""",
+      (aid, data.get("item_id"), data.get("external_id"), data["name"],
+       data.get("official_name", "") or "", data.get("institution", "") or "",
+       data.get("kind", "other"), data.get("subtype", "") or "",
+       data.get("mask", "") or "", float(data.get("balance") or 0),
+       data.get("available"), data.get("credit_limit"), data.get("apr"),
+       data.get("min_payment"), data.get("due_day"), data.get("next_due"),
+       data.get("color", "") or "", int(data.get("position") or 0), ts, ts))
+    add_finance_history(aid, float(data.get("balance") or 0))
+    return get_finance_account(aid)
+
+
+def update_finance_account(aid: str, data: dict) -> dict | None:
+    prev = get_finance_account(aid)
+    if not prev:
+        return None
+    sets, vals = [], []
+    for f in FINANCE_FIELDS:
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    if "hidden" in data:
+        sets.append("hidden = %s")
+        vals.append(bool(data["hidden"]))
+    if not sets:
+        return prev
+    sets.append("updated_at = %s")
+    vals += [now_iso(), aid]
+    q(f"UPDATE finance_accounts SET {', '.join(sets)} WHERE id = %s", vals)
+    # History only on a real move, so a rename doesn't fake a data point.
+    if "balance" in data and float(data["balance"] or 0) != float(prev["balance"] or 0):
+        add_finance_history(aid, float(data["balance"] or 0))
+    return get_finance_account(aid)
+
+
+def delete_finance_account(aid: str) -> bool:
+    return q("DELETE FROM finance_accounts WHERE id = %s", (aid,)) > 0
+
+
+def add_finance_history(aid: str, balance: float) -> None:
+    q("INSERT INTO finance_history (id, account_id, balance, at) VALUES (%s,%s,%s,%s)",
+      (new_uid(), aid, float(balance), now_iso()))
+
+
+def finance_history(aid: str, limit: int = 400) -> list[dict]:
+    return q("""SELECT balance, at FROM finance_history
+                WHERE account_id = %s ORDER BY at DESC LIMIT %s""",
+             (aid, limit), fetch="all")
+
+
+def finance_networth_series(days: int = 180) -> list[dict]:
+    """Daily net worth: last reading per account per day, assets minus debts.
+
+    Carried forward with a window function so a day where only one account was
+    updated still totals every account, rather than dipping to near-zero.
+    """
+    return q("""
+        WITH days AS (
+            SELECT DISTINCT substring(at, 1, 10) AS d FROM finance_history
+            WHERE substring(at, 1, 10) >= to_char(now() - (%s || ' days')::interval, 'YYYY-MM-DD')
+        ),
+        acct_day AS (
+            SELECT a.id, a.kind, d.d,
+                   (SELECT h.balance FROM finance_history h
+                    WHERE h.account_id = a.id AND substring(h.at, 1, 10) <= d.d
+                    ORDER BY h.at DESC LIMIT 1) AS bal
+            FROM finance_accounts a CROSS JOIN days d
+            WHERE a.hidden = FALSE
+        )
+        SELECT d,
+               SUM(CASE WHEN kind IN ('credit','loan') THEN -COALESCE(bal,0)
+                        ELSE COALESCE(bal,0) END) AS net
+        FROM acct_day GROUP BY d ORDER BY d
+    """, (days,), fetch="all")
 
 
 # ------------------------------------------------------------------ people

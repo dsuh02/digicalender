@@ -166,6 +166,17 @@ def transactions_sync(access_token: str, cursor: str | None = None, count: int =
     return call("/transactions/sync", body)
 
 
+def investments_transactions(access_token: str, start: str, end: str, count: int = 500) -> dict:
+    """Buys, sells and — the useful one here — contributions into a retirement
+    account. Separate from /transactions/sync, which only covers depository and
+    credit items; investment activity never appears there."""
+    return call("/investments/transactions/get", {
+        "access_token": access_token,
+        "start_date": start, "end_date": end,
+        "options": {"count": count},
+    })
+
+
 def item_remove(access_token: str) -> dict:
     return call("/item/remove", {"access_token": access_token})
 

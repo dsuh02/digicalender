@@ -8,6 +8,7 @@ import { CashflowWidget, CreditWidget, NetWorthChartWidget, SpendingWidget } fro
 import { DeviceGridWidget, MediaWidget, RokuRemoteWidget, ScenesWidget } from './home.js';
 import { ClockWidget, LabelWidget, WeatherWidget } from './info.js';
 import { GreetingWidget, PeopleWidget } from './people.js';
+import { ProjectionWidget } from './projection.js';
 import { NotificationsWidget, TodoWidget } from './tasks.js';
 
 export const WIDGETS = [
@@ -15,7 +16,7 @@ export const WIDGETS = [
   ClockWidget, GreetingWidget, WeatherWidget, LabelWidget, GalleryWidget, PeopleWidget,
   TodoWidget, NotificationsWidget,
   NetWorthWidget, NetWorthChartWidget, AccountsWidget, BillsWidget,
-  SpendingWidget, CashflowWidget, CreditWidget,
+  SpendingWidget, CashflowWidget, CreditWidget, ProjectionWidget,
   DeviceGridWidget, ScenesWidget, RokuRemoteWidget, MediaWidget,
 ];
 

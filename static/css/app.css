@@ -746,6 +746,54 @@ body.editing .fin-layers { display: none; }
             text-overflow: ellipsis; }
 .legend-v { color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; }
 
+/* ----------------------------------------------------- savings projection */
+
+.proj { flex: 1; min-height: 0; display: flex; flex-direction: column;
+        overflow: hidden; gap: 4px; container-type: size; }
+.proj-head { display: flex; align-items: flex-start; gap: 10px; flex: none; }
+.proj-head-main { min-width: 0; flex: 1; }
+.proj-actions { display: flex; gap: 4px; flex: none; flex-wrap: wrap;
+                justify-content: flex-end; }
+.proj-btn {
+  min-height: 30px; padding: 0 10px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text-2);
+  border-radius: var(--r-ctl); font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.proj-btn:active { background: var(--surface-3); color: var(--text); }
+.proj-btn-icon { padding: 0 8px; display: grid; place-items: center; }
+
+/* The plot claims every gesture inside it: two fingers here mean zoom, not a
+   page change. touch-action:none is what stops the pager ever seeing them. */
+.proj-plot { flex: 1 1 auto; min-height: 60px; touch-action: none; }
+.tchart { display: block; width: 100%; height: 100%; }
+.tchart-line { stroke-width: 2; vector-effect: non-scaling-stroke;
+               stroke-linejoin: round; stroke-linecap: round; }
+.tchart-area { pointer-events: none; }
+
+.proj-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; flex: none;
+               align-content: flex-start; overflow: hidden; }
+.proj-legend-item { display: flex; align-items: center; gap: 6px;
+                    font-size: clamp(10px, 4cqh, 14px); min-width: 0; }
+.proj-legend-k { color: var(--text-2); white-space: nowrap; overflow: hidden;
+                 text-overflow: ellipsis; }
+.proj-legend-v { color: var(--text); font-variant-numeric: tabular-nums;
+                 margin-left: auto; white-space: nowrap; }
+.proj-note { font-size: clamp(9px, 3.4cqh, 12px); color: var(--text-3); flex: none;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Small boxes shed the chrome before the chart. */
+@container (max-height: 200px) { .proj-note { display: none; } }
+@container (max-height: 150px) { .proj-legend { display: none; } }
+@container (max-width: 300px) { .proj-actions { flex-direction: column; } }
+
+.proj-cfg { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.proj-cfg-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.proj-cfg-name { font-weight: 500; font-size: 15px; }
+.proj-cfg-bal { margin-left: auto; color: var(--text-3); font-size: 13px;
+                font-variant-numeric: tabular-nums; }
+.proj-cfg-fields { display: flex; gap: 12px; }
+.proj-cfg-fields .field { flex: 1; }
+
 .link-url {
   display: block; margin: 8px 0; padding: 10px 12px;
   background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);

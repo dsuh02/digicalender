@@ -91,6 +91,10 @@ export const api = {
   startLink: () => req('/api/finance/link', { method: 'POST' }),
   pollLink: link_token => req('/api/finance/link/poll', { method: 'POST', body: JSON.stringify({ link_token }) }),
   deleteFinanceItem: id => req(`/api/finance/items/${id}`, { method: 'DELETE' }),
+  projection: ({ contributions = false } = {}) =>
+    req(`/api/finance/projection${contributions ? '?contributions=1' : ''}`),
+  saveProjection: patch => req('/api/finance/projection', {
+    method: 'POST', body: JSON.stringify(patch) }).then(r => r.config),
   saveKindColors: colors => req('/api/finance/kind-colors', {
     method: 'POST', body: JSON.stringify({ colors }) }).then(r => r.kind_colors),
   createFinanceAccount: d => req('/api/finance/accounts', { method: 'POST', body: JSON.stringify(d) }).then(r => r.account),

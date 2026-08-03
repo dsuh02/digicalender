@@ -84,6 +84,35 @@ export function autoSize(host, draw) {
   };
 }
 
+/**
+ * Report the host's size on change, WITHOUT touching its children.
+ *
+ * autoSize() clears and redraws, which is right for static charts and fatal for
+ * a stateful one: it would delete the node holding pointer capture. Anything
+ * that owns its own DOM across resizes wants this instead.
+ */
+export function observeSize(host, onSize) {
+  let frame = null;
+  let last = '';
+  const measure = () => {
+    frame = null;
+    const w = Math.floor(host.clientWidth);
+    const h = Math.floor(host.clientHeight);
+    if (w < 2 || h < 2) return;
+    const key = `${w}x${h}`;
+    if (key === last) return;
+    last = key;
+    onSize(w, h);
+  };
+  const ro = new ResizeObserver(() => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(measure);
+  });
+  ro.observe(host);
+  measure();
+  return () => { ro.disconnect(); if (frame) cancelAnimationFrame(frame); };
+}
+
 /** Force the next autoSize render even if the box has not changed. */
 export function invalidate(host) {
   host.__chartKey = '';

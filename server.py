@@ -29,6 +29,7 @@ import finance
 import hub
 import ics
 import plaid
+import projection
 import providers
 import store
 import weather
@@ -832,6 +833,16 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 days = 180
             return self._json(200, {"series": store.finance_networth_series(days)})
+
+        if path == "/api/finance/projection":
+            if method == "GET":
+                # Contributions-to-date costs a Plaid round trip per item, so it
+                # is opt-in: the chart itself does not need it to draw.
+                want = (qs.get("contributions") or ["0"])[0] in ("1", "true", "yes")
+                return self._json(200, projection.project(include_contributions=want))
+            if method == "POST":
+                return self._json(200, {"config": projection.set_config(self._body())})
+            raise ApiError(405, "method not allowed")
 
         if path == "/api/finance/kind-colors" and method == "POST":
             b = self._body()

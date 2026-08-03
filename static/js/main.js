@@ -964,7 +964,7 @@ async function renderMoney() {
   const startLink = async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
-    clearInterval(polling);
+    clearTimeout(polling);
     linkStatus.textContent = 'Asking Plaid for a link session…';
     let session;
     try { session = await api.startLink(); }
@@ -977,10 +977,15 @@ async function renderMoney() {
       el('div.field-help', { text: 'Waiting for you to finish… this page updates by itself.' }),
     );
 
+    // Self-scheduling, NOT setInterval: a poll that finds a finished session
+    // exchanges the token and syncs the whole institution, which takes longer
+    // than any sane interval. setInterval fires on the clock regardless, so
+    // several polls overlapped and each one linked the same bank again.
     const started = Date.now();
-    polling = setInterval(async () => {
+    let stopped = false;
+    const tick = async () => {
+      if (stopped) return;
       if (Date.now() - started > 15 * 60000) {       // Link tokens expire
-        clearInterval(polling);
         linkStatus.textContent = 'That link session expired — start another.';
         btn.disabled = false;
         return;
@@ -988,12 +993,16 @@ async function renderMoney() {
       try {
         const r = await api.pollLink(session.link_token);
         if (r.ready) {
-          clearInterval(polling);
-          toast(`Linked ${r.item.institution || 'institution'} — ${r.sync.message}`);
+          stopped = true;
+          toast(r.duplicate ? `${r.item.institution || 'That institution'} is already linked`
+                            : `Linked ${r.item.institution || 'institution'} — ${r.sync.message}`);
           openSettings('Money');
+          return;
         }
       } catch { /* keep polling; transient errors are normal mid-flow */ }
-    }, 3000);
+      if (!stopped) polling = setTimeout(tick, 3000);
+    };
+    polling = setTimeout(tick, 3000);
   };
 
   wrap.append(

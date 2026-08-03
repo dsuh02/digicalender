@@ -151,6 +151,21 @@ def investments(access_token: str) -> dict:
     return call("/investments/holdings/get", {"access_token": access_token})
 
 
+def transactions_sync(access_token: str, cursor: str | None = None, count: int = 500) -> dict:
+    """One page of the /transactions/sync cursor stream.
+
+    Cursor-based, not date-range: Plaid replays added/modified/removed since the
+    cursor, which is what makes a re-sync idempotent instead of a duplicate
+    import. An empty cursor means "from the beginning", and the first call on a
+    fresh item can legitimately return nothing while Plaid is still pulling
+    history — that is a wait, not an error.
+    """
+    body = {"access_token": access_token, "count": count}
+    if cursor:
+        body["cursor"] = cursor
+    return call("/transactions/sync", body)
+
+
 def item_remove(access_token: str) -> dict:
     return call("/item/remove", {"access_token": access_token})
 

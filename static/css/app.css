@@ -593,6 +593,75 @@ button.src-dot-btn:active { background-color: var(--surface-3); background-clip:
 .nw-split-v { font-size: 15px; font-variant-numeric: tabular-nums; }
 .nw-split-v.debt { color: var(--warn); }
 
+/* ------------------------------------------------------------- charts ---
+ * Ink only. Every colour is a CSS variable, so a palette change re-themes
+ * every chart with no redraw. Strokes use vector-effect so a viewBox that
+ * stretches with the widget never thickens a 1px line into a 4px one.
+ */
+.chart { display: block; width: 100%; overflow: visible; }
+.chart-line { stroke-width: 2; vector-effect: non-scaling-stroke;
+              stroke-linejoin: round; stroke-linecap: round; }
+.chart-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart-zero { stroke: var(--line-strong); }
+.chart-tick { fill: var(--text-3); font-size: 9px; font-variant-numeric: tabular-nums; }
+.chart-cursor { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 3 3;
+                vector-effect: non-scaling-stroke; pointer-events: none; }
+.chart-dot { fill: var(--bg); stroke-width: 2; vector-effect: non-scaling-stroke;
+             pointer-events: none; }
+.chart-bar { transition: opacity .12s ease; }
+.chart-donut-empty { stroke: var(--line); }
+.chart-gauge-track { opacity: .5; }
+.chart-area, .chart-bars { flex: none; margin-top: 6px; }
+/* The plot owns horizontal drags so the pager can't steal a scrub as a
+   two-finger page swipe. */
+.chart-area, .chart-bars, .chart-donut { touch-action: none; }
+
+.insight { flex: 1; min-height: 0; display: flex; flex-direction: column;
+           overflow: hidden; gap: 2px; }
+.insight-centre { align-items: center; justify-content: center; }
+.insight-head { flex: none; }
+.insight-label { font-size: 11px; font-weight: 600; letter-spacing: .09em;
+                 text-transform: uppercase; color: var(--text-3); }
+.insight-value { font-size: clamp(22px, 4.4vh, 36px); font-weight: 300;
+                 letter-spacing: -.02em; line-height: 1.15; margin-top: 3px;
+                 font-variant-numeric: tabular-nums; }
+.insight-value.debt { color: var(--warn); }
+.insight-sub { font-size: 12px; color: var(--text-3); margin-top: 3px;
+               font-variant-numeric: tabular-nums; }
+.insight-delta { font-size: 12px; margin-top: 3px; font-variant-numeric: tabular-nums;
+                 color: var(--text-2); min-height: 1em; }
+.insight-delta.down { color: var(--good); }
+.insight-delta.up { color: var(--warn); }
+
+.insight-list { flex: 1; min-height: 0; overflow-y: auto; touch-action: pan-y;
+                margin-top: 8px; display: flex; flex-direction: column; gap: 7px; }
+.bar-row { display: grid; grid-template-columns: minmax(56px, 1fr) 2fr auto;
+           align-items: center; gap: 9px; }
+.bar-row-k { font-size: 12px; color: var(--text-2); white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }
+.bar-row-track { height: 7px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.bar-row-fill { height: 100%; border-radius: 4px; }
+.bar-row-v { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text); }
+
+.donut-wrap, .gauge-wrap { position: relative; display: flex; align-items: center;
+                           justify-content: center; flex: none; margin: 4px 0; }
+.donut-wrap .chart, .gauge-wrap .chart { max-height: 34vh; }
+.donut-centre, .gauge-centre {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; pointer-events: none; text-align: center;
+}
+.donut-centre-k, .gauge-k { font-size: 10px; text-transform: uppercase;
+                            letter-spacing: .08em; color: var(--text-3); }
+.donut-centre-v { font-size: 17px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.donut-centre-s { font-size: 10px; color: var(--text-3); margin-top: 2px; }
+.gauge-v { font-size: 30px; font-weight: 300; font-variant-numeric: tabular-nums; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 8px; flex: none; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.legend-k { color: var(--text-2); }
+.legend-v { color: var(--text-3); font-variant-numeric: tabular-nums; }
+
 .link-url {
   display: block; margin: 8px 0; padding: 10px 12px;
   background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);

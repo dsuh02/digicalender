@@ -828,6 +828,20 @@ class Handler(BaseHTTPRequestHandler):
                 days = 180
             return self._json(200, {"series": store.finance_networth_series(days)})
 
+        if path == "/api/finance/insights" and method == "GET":
+            try:
+                months = min(int((qs.get("months") or ["6"])[0] or 6), 24)
+            except ValueError:
+                months = 6
+            return self._json(200, finance.insights(months))
+
+        if path == "/api/finance/transactions" and method == "GET":
+            try:
+                limit = min(int((qs.get("limit") or ["25"])[0] or 25), 200)
+            except ValueError:
+                limit = 25
+            return self._json(200, {"transactions": store.finance_recent_transactions(limit)})
+
         if path == "/api/finance/sync" and method == "POST":
             results = finance.sync_all()
             n = finance.sync_bill_events()
@@ -865,11 +879,33 @@ class Handler(BaseHTTPRequestHandler):
                 ex = plaid.exchange(public_token)
             except plaid.PlaidError as e:
                 raise ApiError(400, e.message)
+
+            # /link/token/get keeps returning a completed session's public_token
+            # until the link token expires, so this endpoint WILL be called again
+            # after it has already succeeded — by a retry, a second tab, or two
+            # polls overlapping because the sync below outlasts the poll interval.
+            # Identity is Plaid's item_id: exchanging twice gives two different
+            # access_tokens for one item, so the token cannot be the key.
+            #
+            # Do NOT call /item/remove on the redundant token. It removes the
+            # ITEM, not the token, and would invalidate the copy we are keeping.
+            existing = store.get_finance_item_by_item_id(ex.get("item_id"))
+            if existing:
+                return self._json(200, {"ready": True, "duplicate": True,
+                                        "item": {"id": existing["id"],
+                                                 "institution": existing.get("institution") or inst},
+                                        "sync": {"ok": True, "message": "already linked"}})
+
             item = store.create_finance_item({
                 "item_id": ex.get("item_id"), "access_token": ex.get("access_token"),
                 "institution": inst,
             })
             out = finance.sync_item(store.get_finance_item(item["id"]))
+            if out.get("ok"):
+                # Balances first, then transactions — they attach to the account
+                # rows sync_item just created.
+                out["transactions"] = finance.sync_transactions(
+                    store.get_finance_item(item["id"]))
             finance.sync_bill_events()
             hub.bus.publish("finance_changed", {})
             hub.bus.publish("events_changed", {})

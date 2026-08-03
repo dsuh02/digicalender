@@ -185,8 +185,14 @@ CREATE TABLE IF NOT EXISTS finance_items (
     institution  TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT '',
     last_sync    TEXT,
+    tx_cursor    TEXT,
     created_at   TEXT NOT NULL
 );
+-- One row per Plaid item, enforced by the database. The link flow is polled,
+-- and a slow exchange used to let concurrent polls insert the same item several
+-- times over — which silently multiplied every balance and every net worth.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fitem_itemid
+    ON finance_items(item_id) WHERE item_id IS NOT NULL;
 
 -- Balances are DOUBLE PRECISION, not NUMERIC: this is a display surface, and
 -- floats keep the JSON boundary free of Decimal special-casing. Do not do
@@ -224,6 +230,32 @@ CREATE TABLE IF NOT EXISTS finance_history (
     at         TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fhist ON finance_history(account_id, at);
+
+-- Transactions, for the spending and cash-flow views.
+--
+-- `posted_on` is a DATE STRING (YYYY-MM-DD), not a timestamp — for the same
+-- reason all-day events are: a purchase happened on a calendar day, and running
+-- it through a timezone is how a Sunday coffee lands in Saturday's total.
+--
+-- **Plaid's sign convention is inverted from intuition**: a POSITIVE amount is
+-- money leaving the account. Stored exactly as Plaid sends it so the raw data
+-- stays faithful; every read site flips it, via finance.spending().
+CREATE TABLE IF NOT EXISTS finance_transactions (
+    id          TEXT PRIMARY KEY,
+    item_id     TEXT REFERENCES finance_items(id) ON DELETE CASCADE,
+    account_id  TEXT REFERENCES finance_accounts(id) ON DELETE CASCADE,
+    external_id TEXT,
+    name        TEXT NOT NULL DEFAULT '',
+    merchant    TEXT NOT NULL DEFAULT '',
+    amount      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    category    TEXT NOT NULL DEFAULT '',
+    pending     BOOLEAN NOT NULL DEFAULT FALSE,
+    posted_on   TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ftx_external
+    ON finance_transactions(item_id, external_id) WHERE external_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ftx_date ON finance_transactions(posted_on DESC);
 
 -- Gallery sets: one row per set, one folder per set under galleries/ on disk.
 -- The DB stores names + order; the FILES are the user's and outlive both the
@@ -304,7 +336,7 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def init_db() -> None:
@@ -332,6 +364,26 @@ def init_db() -> None:
     if row["version"] < 6:
         # v6: finance tables — created by SCHEMA above; only the version moves.
         q("UPDATE schema_version SET version = 6")
+    if row["version"] < 7:
+        # v7: one row per Plaid item. Concurrent polls of the link flow could
+        # exchange the same public_token repeatedly, and every exchange inserted
+        # another copy of the same institution — 10 rows for 2 real banks, with
+        # every balance counted once per copy.
+        #
+        # Collapse to the earliest row per item_id first; the unique index below
+        # cannot be created while duplicates exist. Accounts, history and bill
+        # events cascade from the rows that go.
+        q("""DELETE FROM finance_items a USING finance_items b
+              WHERE a.item_id IS NOT NULL AND a.item_id = b.item_id
+                AND (a.created_at > b.created_at
+                     OR (a.created_at = b.created_at AND a.id > b.id))""")
+        q("""CREATE UNIQUE INDEX IF NOT EXISTS idx_fitem_itemid
+                ON finance_items(item_id) WHERE item_id IS NOT NULL""")
+        # v7 also adds finance_transactions (created by SCHEMA above) and the
+        # per-item transaction cursor. ADD COLUMN is needed for the cursor
+        # because finance_items already exists on any v6 database.
+        q("ALTER TABLE finance_items ADD COLUMN IF NOT EXISTS tx_cursor TEXT")
+        q("UPDATE schema_version SET version = 7")
 
 
 # --------------------------------------------------------------------- events
@@ -789,6 +841,20 @@ def get_finance_item(iid: str) -> dict | None:
     return q("SELECT * FROM finance_items WHERE id = %s", (iid,), fetch="one")
 
 
+def get_finance_item_by_item_id(item_id: str) -> dict | None:
+    """Look an item up by Plaid's id, so linking is idempotent.
+
+    Exchanging a public_token twice yields two different access_tokens for the
+    SAME item_id — so the Plaid id is the only reliable identity here, and the
+    only thing that can tell a genuine second institution from the same one
+    arriving twice.
+    """
+    if not item_id:
+        return None
+    return q("SELECT * FROM finance_items WHERE item_id = %s ORDER BY created_at LIMIT 1",
+             (item_id,), fetch="one")
+
+
 def create_finance_item(data: dict) -> dict:
     iid = new_uid()
     q("""INSERT INTO finance_items (id, provider, item_id, access_token,
@@ -920,6 +986,101 @@ def finance_networth_series(days: int = 180) -> list[dict]:
                         ELSE COALESCE(bal,0) END) AS net
         FROM acct_day GROUP BY d ORDER BY d
     """, (days,), fetch="all")
+
+
+# ------------------------------------------------------------ transactions
+
+# Money moving between your OWN accounts is not spending, and neither is paying
+# a card — the purchases on that card were already counted. Leaving these in
+# double-counts every dollar and makes the spending chart useless.
+NON_SPEND = ["TRANSFER_IN", "TRANSFER_OUT", "LOAN_PAYMENTS"]
+
+
+def upsert_finance_transaction(data: dict) -> None:
+    """Insert or update one transaction, keyed on Plaid's id.
+
+    Plaid re-sends a transaction when it settles (pending -> posted, and the
+    amount can change), so this has to be an upsert or every purchase is
+    counted twice: once pending, once final.
+    """
+    q("""INSERT INTO finance_transactions
+             (id, item_id, account_id, external_id, name, merchant, amount,
+              category, pending, posted_on, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+         ON CONFLICT (item_id, external_id) WHERE external_id IS NOT NULL
+         DO UPDATE SET name = EXCLUDED.name, merchant = EXCLUDED.merchant,
+                       amount = EXCLUDED.amount, category = EXCLUDED.category,
+                       pending = EXCLUDED.pending, posted_on = EXCLUDED.posted_on,
+                       account_id = EXCLUDED.account_id""",
+      (new_uid(), data.get("item_id"), data.get("account_id"), data.get("external_id"),
+       (data.get("name") or "")[:300], (data.get("merchant") or "")[:200],
+       float(data.get("amount") or 0), (data.get("category") or "")[:80],
+       bool(data.get("pending")), data["posted_on"], now_iso()))
+
+
+def delete_finance_transactions(external_ids: list[str]) -> int:
+    if not external_ids:
+        return 0
+    return q("DELETE FROM finance_transactions WHERE external_id = ANY(%s)",
+             (list(external_ids),))
+
+
+def count_finance_transactions() -> int:
+    return q("SELECT count(*) AS n FROM finance_transactions", fetch="one")["n"]
+
+
+def finance_spend_by_category(months: int = 6) -> list[dict]:
+    """Outflow per category over a window. Amounts flipped to positive-is-spend."""
+    return q("""
+        SELECT COALESCE(NULLIF(category, ''), 'OTHER') AS category,
+               SUM(amount) AS total, count(*) AS n
+        FROM finance_transactions
+        WHERE amount > 0
+          AND category <> ALL(%s)
+          AND posted_on >= to_char(
+                date_trunc('month', now() - (%s || ' months')::interval), 'YYYY-MM-DD')
+        GROUP BY 1 ORDER BY total DESC
+    """, (NON_SPEND, months - 1), fetch="all")
+
+
+def finance_cashflow_by_month(months: int = 6) -> list[dict]:
+    """Money in vs money out per calendar month.
+
+    Transfers are excluded from BOTH directions — moving $500 to savings is not
+    income and not spending, and counting it inflates each side equally.
+    """
+    return q("""
+        SELECT substring(posted_on, 1, 7) AS month,
+               SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) AS money_in,
+               SUM(CASE WHEN amount > 0 THEN  amount ELSE 0 END) AS money_out
+        FROM finance_transactions
+        WHERE category <> ALL(%s)
+          AND posted_on >= to_char(
+                date_trunc('month', now() - (%s || ' months')::interval), 'YYYY-MM-DD')
+        GROUP BY 1 ORDER BY 1
+    """, (NON_SPEND, months - 1), fetch="all")
+
+
+def finance_top_merchants(months: int = 1, limit: int = 8) -> list[dict]:
+    return q("""
+        SELECT COALESCE(NULLIF(merchant, ''), name) AS merchant,
+               SUM(amount) AS total, count(*) AS n
+        FROM finance_transactions
+        WHERE amount > 0
+          AND category <> ALL(%s)
+          AND posted_on >= to_char(
+                date_trunc('month', now() - (%s || ' months')::interval), 'YYYY-MM-DD')
+        GROUP BY 1 HAVING SUM(amount) > 0
+        ORDER BY total DESC LIMIT %s
+    """, (NON_SPEND, months - 1, limit), fetch="all")
+
+
+def finance_recent_transactions(limit: int = 25) -> list[dict]:
+    return q("""SELECT t.*, a.name AS account_name, a.institution
+                FROM finance_transactions t
+                LEFT JOIN finance_accounts a ON t.account_id = a.id
+                ORDER BY t.posted_on DESC, t.created_at DESC LIMIT %s""",
+             (limit,), fetch="all")
 
 
 # ------------------------------------------------------------------ people

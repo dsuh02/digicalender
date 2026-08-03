@@ -158,11 +158,95 @@ def sync_item(item: dict) -> dict:
             "institution": institution, "count": n}
 
 
+# ------------------------------------------------------------ transactions
+
+MAX_TX_PAGES = 20          # 500/page — a hard stop, not an expected limit
+
+
+def _tx_category(t: dict) -> str:
+    """Plaid's personal_finance_category, falling back to the legacy list.
+
+    PFC is the current taxonomy and is far cleaner for charting (a fixed set of
+    ~16 primaries); `category` is the deprecated free-ish hierarchy. Items
+    enrolled before PFC still only send the old one, so both paths are live.
+    """
+    pfc = t.get("personal_finance_category") or {}
+    if pfc.get("primary"):
+        return str(pfc["primary"])
+    legacy = t.get("category") or []
+    return str(legacy[0]).upper().replace(" ", "_") if legacy else ""
+
+
+def sync_transactions(item: dict) -> dict:
+    """Pull this item's transactions via the cursor stream.
+
+    Resumes from the stored cursor, so a re-run costs one empty round trip
+    instead of re-importing history. The cursor is only advanced once a page has
+    been written — crash mid-page and the next run replays it, which the upsert
+    makes harmless.
+    """
+    token = item.get("access_token")
+    if not token:
+        return {"ok": False, "message": "no access token"}
+
+    # Map Plaid's account ids to ours once, rather than per transaction.
+    accounts = {a["external_id"]: a["id"]
+                for a in store.list_finance_accounts()
+                if a.get("item_id") == item["id"] and a.get("external_id")}
+
+    cursor = item.get("tx_cursor") or None
+    added = modified = removed = 0
+    pages = 0
+    try:
+        while pages < MAX_TX_PAGES:
+            pages += 1
+            page = plaid.transactions_sync(token, cursor)
+            for group, counter in (("added", "a"), ("modified", "m")):
+                for t in page.get(group) or []:
+                    store.upsert_finance_transaction({
+                        "item_id": item["id"],
+                        "account_id": accounts.get(t.get("account_id")),
+                        "external_id": t.get("transaction_id"),
+                        "name": t.get("name") or "",
+                        "merchant": t.get("merchant_name") or "",
+                        "amount": t.get("amount") or 0,
+                        "category": _tx_category(t),
+                        "pending": bool(t.get("pending")),
+                        "posted_on": (t.get("authorized_date") or t.get("date")
+                                      or store.now_iso()[:10]),
+                    })
+                    if counter == "a":
+                        added += 1
+                    else:
+                        modified += 1
+            gone = [t.get("transaction_id") for t in (page.get("removed") or [])
+                    if t.get("transaction_id")]
+            removed += store.delete_finance_transactions(gone)
+
+            cursor = page.get("next_cursor") or cursor
+            store.update_finance_item(item["id"], {"tx_cursor": cursor})
+            if not page.get("has_more"):
+                break
+    except plaid.PlaidError as e:
+        # Transactions are an add-on: an item without the product still has
+        # perfectly good balances, so this must not fail the whole sync.
+        return {"ok": False, "message": e.message, "code": e.code,
+                "added": added, "modified": modified, "removed": removed}
+
+    return {"ok": True, "added": added, "modified": modified, "removed": removed,
+            "message": f"{added} new, {modified} updated, {removed} removed"}
+
+
 def sync_all() -> list[dict]:
     out = []
     for it in store.list_finance_items():
         try:
-            out.append(sync_item(store.get_finance_item(it["id"])))
+            res = sync_item(store.get_finance_item(it["id"]))
+            # Balances first — transactions need the account rows to exist so
+            # each one can be attributed to the account it happened on.
+            if res.get("ok"):
+                res["transactions"] = sync_transactions(store.get_finance_item(it["id"]))
+            out.append(res)
         except Exception as e:
             out.append({"id": it["id"], "ok": False, "message": str(e)})
     return out
@@ -183,6 +267,100 @@ def summary() -> dict:
         "net": round(assets - debts, 2),
         "by_kind": {k: round(sum(x["balance"] for x in v), 2) for k, v in groups.items()},
         "count": len(accounts),
+        "utilization": _utilization(accounts),
+    }
+
+
+def _utilization(accounts: list[dict]) -> dict | None:
+    """Revolving credit used vs available, the single most actionable card stat.
+
+    Only cards with a stated limit count — a card whose limit Plaid doesn't
+    report would otherwise drag the ratio toward zero and make a maxed-out
+    wallet look healthy.
+    """
+    cards = [a for a in accounts
+             if a["kind"] == "credit" and (a.get("credit_limit") or 0) > 0]
+    if not cards:
+        return None
+    used = sum(a["balance"] for a in cards)
+    limit = sum(a["credit_limit"] for a in cards)
+    return {"used": round(used, 2), "limit": round(limit, 2),
+            "pct": round((used / limit) * 100, 1) if limit else 0.0,
+            "cards": len(cards)}
+
+
+# ----------------------------------------------------------------- insights
+
+CATEGORY_LABEL = {
+    "FOOD_AND_DRINK": "Food & drink",
+    "GENERAL_MERCHANDISE": "Shopping",
+    "TRANSPORTATION": "Transport",
+    "TRAVEL": "Travel",
+    "RENT_AND_UTILITIES": "Rent & utilities",
+    "ENTERTAINMENT": "Entertainment",
+    "PERSONAL_CARE": "Personal care",
+    "MEDICAL": "Medical",
+    "GENERAL_SERVICES": "Services",
+    "HOME_IMPROVEMENT": "Home",
+    "INCOME": "Income",
+    "GOVERNMENT_AND_NON_PROFIT": "Government",
+    "BANK_FEES": "Fees",
+    "OTHER": "Other",
+}
+
+
+def category_label(code: str) -> str:
+    if code in CATEGORY_LABEL:
+        return CATEGORY_LABEL[code]
+    return (code or "Other").replace("_", " ").title()
+
+
+def insights(months: int = 6) -> dict:
+    """Everything the spending/cash-flow charts need, in one round trip.
+
+    One call rather than four, because each widget re-fetching on every SSE
+    nudge would hammer the database from a panel that redraws whenever anything
+    at all changes.
+    """
+    months = max(1, min(24, int(months or 6)))
+    cats = store.finance_spend_by_category(months)
+    flow = store.finance_cashflow_by_month(months)
+    total = sum(float(c["total"] or 0) for c in cats)
+
+    # This month vs last, the comparison every banking app leads with.
+    this_month = flow[-1] if flow else None
+    prev_month = flow[-2] if len(flow) > 1 else None
+    spent_now = float(this_month["money_out"] or 0) if this_month else 0.0
+    spent_prev = float(prev_month["money_out"] or 0) if prev_month else None
+
+    return {
+        "months": months,
+        "total_spend": round(total, 2),
+        "categories": [{
+            "code": c["category"],
+            "label": category_label(c["category"]),
+            "total": round(float(c["total"] or 0), 2),
+            "count": c["n"],
+            "pct": round((float(c["total"] or 0) / total) * 100, 1) if total else 0.0,
+        } for c in cats],
+        "cashflow": [{
+            "month": f["month"],
+            "in": round(float(f["money_in"] or 0), 2),
+            "out": round(float(f["money_out"] or 0), 2),
+            "net": round(float(f["money_in"] or 0) - float(f["money_out"] or 0), 2),
+        } for f in flow],
+        "this_month": {
+            "spent": round(spent_now, 2),
+            "prev": round(spent_prev, 2) if spent_prev is not None else None,
+            "delta_pct": (round(((spent_now - spent_prev) / spent_prev) * 100, 1)
+                          if spent_prev else None),
+        },
+        "merchants": [{
+            "name": m["merchant"] or "Unknown",
+            "total": round(float(m["total"] or 0), 2),
+            "count": m["n"],
+        } for m in store.finance_top_merchants(1, 8)],
+        "transaction_count": store.count_finance_transactions(),
     }
 
 

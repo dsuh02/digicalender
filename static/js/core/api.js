@@ -85,6 +85,8 @@ export const api = {
   // money
   finance: () => req('/api/finance'),
   netWorthSeries: (days = 180) => req(`/api/finance/networth?days=${days}`).then(r => r.series),
+  insights: (months = 6) => req(`/api/finance/insights?months=${months}`),
+  transactions: (limit = 25) => req(`/api/finance/transactions?limit=${limit}`).then(r => r.transactions),
   syncFinance: () => req('/api/finance/sync', { method: 'POST' }),
   startLink: () => req('/api/finance/link', { method: 'POST' }),
   pollLink: link_token => req('/api/finance/link/poll', { method: 'POST', body: JSON.stringify({ link_token }) }),

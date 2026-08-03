@@ -188,11 +188,10 @@ CREATE TABLE IF NOT EXISTS finance_items (
     tx_cursor    TEXT,
     created_at   TEXT NOT NULL
 );
--- One row per Plaid item, enforced by the database. The link flow is polled,
--- and a slow exchange used to let concurrent polls insert the same item several
--- times over — which silently multiplied every balance and every net worth.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_fitem_itemid
-    ON finance_items(item_id) WHERE item_id IS NOT NULL;
+-- NOTE: the unique index on item_id is deliberately NOT here. SCHEMA runs
+-- before any migration, so creating it here raises UniqueViolation on a
+-- database that still holds duplicates — and the app can never boot to run the
+-- migration that would clean them up. See _dedupe_finance_items().
 
 -- Balances are DOUBLE PRECISION, not NUMERIC: this is a display surface, and
 -- floats keep the JSON boundary free of Decimal special-casing. Do not do
@@ -339,12 +338,28 @@ def new_uid() -> str:
 SCHEMA_VERSION = 7
 
 
+def _dedupe_finance_items() -> None:
+    """Collapse duplicate Plaid items, then enforce uniqueness.
+
+    Order matters and is the whole point: the unique index cannot be created
+    while duplicates exist, so the DELETE must come first. Safe to call on a
+    fresh, empty database — both statements are then no-ops.
+    """
+    q("""DELETE FROM finance_items a USING finance_items b
+          WHERE a.item_id IS NOT NULL AND a.item_id = b.item_id
+            AND (a.created_at > b.created_at
+                 OR (a.created_at = b.created_at AND a.id > b.id))""")
+    q("""CREATE UNIQUE INDEX IF NOT EXISTS idx_fitem_itemid
+            ON finance_items(item_id) WHERE item_id IS NOT NULL""")
+
+
 def init_db() -> None:
     with conn().cursor() as cur:
         cur.execute(SCHEMA)
     row = q("SELECT version FROM schema_version LIMIT 1", fetch="one")
     if row is None:
         q("INSERT INTO schema_version (version) VALUES (%s)", (SCHEMA_VERSION,))
+        _dedupe_finance_items()          # no-op here; creates the index
         seed_default_dashboard()
         return
     if row["version"] < 3:
@@ -373,12 +388,7 @@ def init_db() -> None:
         # Collapse to the earliest row per item_id first; the unique index below
         # cannot be created while duplicates exist. Accounts, history and bill
         # events cascade from the rows that go.
-        q("""DELETE FROM finance_items a USING finance_items b
-              WHERE a.item_id IS NOT NULL AND a.item_id = b.item_id
-                AND (a.created_at > b.created_at
-                     OR (a.created_at = b.created_at AND a.id > b.id))""")
-        q("""CREATE UNIQUE INDEX IF NOT EXISTS idx_fitem_itemid
-                ON finance_items(item_id) WHERE item_id IS NOT NULL""")
+        _dedupe_finance_items()
         # v7 also adds finance_transactions (created by SCHEMA above) and the
         # per-item transaction cursor. ADD COLUMN is needed for the cursor
         # because finance_items already exists on any v6 database.

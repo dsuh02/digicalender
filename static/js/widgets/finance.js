@@ -9,6 +9,8 @@
 import { api, bus } from '../core/api.js';
 import { autoSize, sparkline } from '../core/charts.js';
 import { icon } from '../core/icons.js';
+import { close, openSheet, toast } from '../core/sheet.js';
+import { eventPalette, getTheme } from '../core/theme.js';
 import { clear, el, fromApi } from '../core/util.js';
 
 const REVEAL_MS = 25000;
@@ -18,6 +20,22 @@ const KIND_LABEL = {
   loan: 'Loans', investment: 'Investments', retirement: 'Retirement', other: 'Other',
 };
 const KIND_ORDER = ['checking', 'savings', 'investment', 'retirement', 'credit', 'loan', 'other'];
+
+/* Colour is BY KIND, not per account. On a wall you want to read "the amber
+ * rows are cards" at a glance; eight individually-coloured rows are eight
+ * colours that mean nothing. Defaults are palette SLOTS, not hex, so they
+ * re-theme with everything else — an override is only stored once you pick one.
+ */
+export function kindColor(kind, overrides = {}) {
+  if (overrides && overrides[kind]) return overrides[kind];
+  const i = KIND_ORDER.indexOf(kind);
+  return `var(--c-${(i < 0 ? KIND_ORDER.length : i) % 6 + 1})`;
+}
+
+/** A per-account colour still wins if one was ever set. */
+export function accountColor(a, overrides = {}) {
+  return a.color || kindColor(a.kind, overrides);
+}
 
 export function money(n, { cents = false } = {}) {
   const v = Number(n || 0);
@@ -46,6 +64,109 @@ function privacy(host, settings) {
 
 const dots = (s = '••••••') => s;
 
+/**
+ * Show/hide accounts, and recolour a whole account type.
+ *
+ * Reachable in NORMAL mode from the layers button on any Accounts widget, for
+ * the same reason the calendar's is: hiding a balance before people come over
+ * must not require unlocking the layout.
+ *
+ * Grouped by kind because that is the unit colour works in, and because "hide
+ * every loan" is the thing people actually want, not "hide account 4 of 9".
+ */
+export async function openAccountVisibility() {
+  let data;
+  try { data = await api.finance(); }
+  catch (e) { toast(e.message, true); return; }
+
+  const accounts = data.accounts || [];
+  const overrides = { ...(data.kind_colors || {}) };
+  const body = el('div');
+
+  if (!accounts.length) {
+    body.append(el('p.sheet-note', {
+      text: 'No accounts yet. Link an institution under Settings › Money, or add one by hand.',
+    }));
+  }
+
+  const palette = eventPalette(getTheme()).map(c => c.value);
+  const kinds = KIND_ORDER.filter(k => accounts.some(a => a.kind === k));
+
+  for (const k of kinds) {
+    const group = accounts.filter(a => a.kind === k);
+
+    // Tapping the group dot cycles the colour for the whole TYPE. Every row
+    // below it, and every widget showing them, follows.
+    const dot = el('button.src-dot.src-dot-btn', {
+      type: 'button', 'aria-label': `Change colour of ${KIND_LABEL[k] || k}`,
+      style: { backgroundColor: kindColor(k, overrides) },
+      onclick: async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const at = palette.indexOf(overrides[k]);
+        const next = palette[(at + 1) % palette.length];
+        try {
+          Object.assign(overrides, await api.saveKindColors({ ...overrides, [k]: next }));
+          dot.style.backgroundColor = kindColor(k, overrides);
+          rows.forEach(r => { r.dot.style.backgroundColor = kindColor(k, overrides); });
+        } catch (err) { toast(err.message, true); }
+      },
+    });
+
+    const shown = group.filter(a => !a.hidden).length;
+    const head = el('div.src-group', {}, [
+      dot,
+      el('span.src-group-k', { text: KIND_LABEL[k] || k }),
+      el('span.src-group-n', { text: `${shown}/${group.length} shown · tap the dot to recolour` }),
+    ]);
+    body.append(head);
+
+    const rows = [];
+    const list = el('div.src-list');
+    for (const a of group) {
+      const input = el('input.switch-input', { type: 'checkbox' });
+      input.checked = !a.hidden;
+      input.addEventListener('change', async () => {
+        try {
+          await api.updateFinanceAccount(a.id, { hidden: !input.checked });
+          a.hidden = !input.checked;
+          head.lastChild.textContent =
+            `${group.filter(x => !x.hidden).length}/${group.length} shown · tap the dot to recolour`;
+          // The server broadcasts finance_changed; every money widget redraws,
+          // and net worth re-totals without the hidden accounts.
+        } catch (e) {
+          input.checked = !input.checked;
+          toast(e.message, true);
+        }
+      });
+
+      const rowDot = el('span.src-dot', { style: { backgroundColor: kindColor(k, overrides) } });
+      rows.push({ dot: rowDot });
+      list.append(el('label.src-row', {}, [
+        rowDot,
+        el('span.src-main', {}, [
+          el('span.src-name', { text: a.name }),
+          el('span.src-meta', {
+            text: [a.institution, a.mask ? `••${a.mask}` : null,
+                   money(Math.abs(a.balance))].filter(Boolean).join(' · '),
+          }),
+        ]),
+        input, el('span.switch'),
+      ]));
+    }
+    body.append(list);
+  }
+
+  openSheet({
+    title: 'Accounts',
+    body,
+    actions: [
+      { label: 'Manage…', onClick: () => { close(); window._openSettings?.('Money'); } },
+      { label: 'Done', kind: 'primary', onClick: close },
+    ],
+  });
+}
+
 /* --------------------------------------------------------------- accounts */
 
 export const AccountsWidget = {
@@ -64,12 +185,20 @@ export const AccountsWidget = {
   ],
   render(host, ctx) {
     const body = el('div.fin-list');
-    host.append(body);
+    host.append(el('button.fin-layers', {
+      type: 'button', 'aria-label': 'Show or hide accounts', title: 'Show or hide accounts',
+      onclick: (e) => { e.stopPropagation(); openAccountVisibility(); },
+    }, [icon('layers', 15)]), body);
     let accounts = [];
+    let colors = {};
     const priv = privacy(host, ctx.settings);
 
     const load = async () => {
-      try { accounts = (await api.finance()).accounts || []; } catch { accounts = []; }
+      try {
+        const f = await api.finance();
+        accounts = f.accounts || [];
+        colors = f.kind_colors || {};
+      } catch { accounts = []; colors = {}; }
       draw();
     };
 
@@ -85,7 +214,7 @@ export const AccountsWidget = {
       const rows = (arr) => arr.forEach(a => {
         const debt = DEBT_KINDS.has(a.kind);
         body.append(el('div.fin-row', {}, [
-          el('span.fin-dot', { style: a.color ? { backgroundColor: a.color } : {} }),
+          el('span.fin-dot', { style: { backgroundColor: accountColor(a, colors) } }),
           el('div.fin-main', {}, [
             el('div.fin-name', { text: a.name }),
             el('div.fin-meta', {
@@ -220,12 +349,20 @@ export const BillsWidget = {
   ],
   render(host, ctx) {
     const body = el('div.fin-list');
-    host.append(body);
+    host.append(el('button.fin-layers', {
+      type: 'button', 'aria-label': 'Show or hide accounts', title: 'Show or hide accounts',
+      onclick: (e) => { e.stopPropagation(); openAccountVisibility(); },
+    }, [icon('layers', 15)]), body);
     let accounts = [];
+    let colors = {};
     const priv = privacy(host, ctx.settings);
 
     const load = async () => {
-      try { accounts = (await api.finance()).accounts || []; } catch { accounts = []; }
+      try {
+        const f = await api.finance();
+        accounts = f.accounts || [];
+        colors = f.kind_colors || {};
+      } catch { accounts = []; colors = {}; }
       draw();
     };
 

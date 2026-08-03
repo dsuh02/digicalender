@@ -15,6 +15,7 @@ the calendar code needed to learn about money.
 from __future__ import annotations
 
 import calendar as _cal
+import json
 from datetime import date, timedelta
 
 import plaid
@@ -269,6 +270,33 @@ def summary() -> dict:
         "count": len(accounts),
         "utilization": _utilization(accounts),
     }
+
+
+# Accounts are coloured BY KIND, not individually: on a wall you read "that
+# amber row is a card" at a glance, and per-account colours would make eight
+# rows eight different colours that mean nothing. Stored as overrides only —
+# an absent kind falls back to a slot in the theme palette, so the defaults
+# re-theme with everything else instead of being frozen hex.
+KIND_COLORS_KEY = "finance_kind_colors"
+
+
+def kind_colors() -> dict:
+    raw = store.get_setting(KIND_COLORS_KEY) or ""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    return {k: str(v)[:24] for k, v in data.items()
+            if isinstance(k, str) and isinstance(v, str)} if isinstance(data, dict) else {}
+
+
+def set_kind_colors(colors: dict) -> dict:
+    clean = {str(k)[:20]: str(v)[:24] for k, v in colors.items()
+             if isinstance(k, str) and isinstance(v, str) and v.strip()}
+    store.set_setting(KIND_COLORS_KEY, json.dumps(clean))
+    return clean
 
 
 def _utilization(accounts: list[dict]) -> dict | None:

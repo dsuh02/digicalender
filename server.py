@@ -811,9 +811,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/finance":
             if method == "GET":
                 return self._json(200, {
-                    "accounts": store.list_finance_accounts(),
+                    # include_hidden: the widgets need to KNOW an account is
+                    # hidden so the visibility sheet can list it and switch it
+                    # back on. Filtering here would make hiding irreversible
+                    # from the panel.
+                    "accounts": store.list_finance_accounts(include_hidden=True),
                     "items": [{k: v for k, v in it.items() if k != "access_token"}
                               for it in store.list_finance_items()],
+                    "kind_colors": finance.kind_colors(),
                     "summary": finance.summary(),
                     "configured": bool((store.get_setting("plaid_client_id") or "").strip()
                                        and (store.get_setting("plaid_secret") or "").strip()),
@@ -827,6 +832,15 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 days = 180
             return self._json(200, {"series": store.finance_networth_series(days)})
+
+        if path == "/api/finance/kind-colors" and method == "POST":
+            b = self._body()
+            colors = b.get("colors")
+            if not isinstance(colors, dict):
+                raise ApiError(400, "colors must be an object of kind -> colour")
+            finance.set_kind_colors(colors)
+            hub.bus.publish("finance_changed", {})
+            return self._json(200, {"kind_colors": finance.kind_colors()})
 
         if path == "/api/finance/insights" and method == "GET":
             try:

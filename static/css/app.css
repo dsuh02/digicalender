@@ -527,6 +527,32 @@ button.src-dot-btn:active { background-color: var(--surface-3); background-clip:
 .src-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .src-name { font-weight: 500; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .src-meta { font-size: 12px; color: var(--text-3); }
+
+/* Type headings in the accounts sheet. The dot is the TYPE's colour — tapping
+   it recolours every account of that type at once. */
+.src-group {
+  display: flex; align-items: center; gap: 10px;
+  margin: 14px 0 6px; padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.src-group:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.src-group-k { font-size: 11px; font-weight: 600; letter-spacing: .09em;
+               text-transform: uppercase; color: var(--text-2); }
+.src-group-n { font-size: 11px; color: var(--text-3); margin-left: auto;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Layers button on the Accounts widget: visibility without unlocking the
+   layout. z-index 3 keeps it UNDER the edit-mode chrome (5-7), which is right —
+   while you are rearranging widgets you are not toggling balances. */
+.fin-layers {
+  position: absolute; top: 7px; right: 7px; z-index: 3;
+  width: 30px; height: 30px; display: grid; place-items: center;
+  border: none; background: transparent; color: var(--text-3);
+  border-radius: var(--r-ctl); cursor: pointer; opacity: .5;
+  transition: opacity .12s ease, background .12s ease;
+}
+.fin-layers:active { opacity: 1; background: var(--surface-2); }
+body.editing .fin-layers { display: none; }
 .src-url {
   max-width: 560px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font-size: 12px; opacity: .8;

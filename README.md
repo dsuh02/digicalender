@@ -91,7 +91,7 @@ unlock, so a passing brush can't rearrange the wall.
 | Productivity | To-do list, Notifications |
 | Home | Device tiles, Scenes, Roku remote, Media control |
 | Photos | Gallery (in-widget slideshow), Screensaver trigger |
-| Money | Accounts, Net worth, Upcoming bills |
+| Money | Accounts, Net worth, Net worth chart, Upcoming bills, Spending, Cash flow, Credit usage |
 
 Every widget declares a settings schema; the options panel is generated from it,
 so adding a setting is a one-line change and never involves writing form markup.
@@ -138,8 +138,13 @@ Three things the dashboard grew into, each worth a note:
   `ON DELETE SET NULL`, never cascade — their pages survive them.
 - **Money** links accounts through Plaid (Hosted Link, so no keyboard and no JS
   widget on the panel) or by hand, and can drop credit-card and loan due dates
-  onto the calendar as all-day events. Balances are hidden behind dots by
-  default and re-hide themselves 25 seconds after a tap — it is a wall display.
+  onto the calendar as all-day events. Transactions come in over
+  `/transactions/sync` and drive spending-by-category, cash flow and credit
+  utilisation charts, all drawn as hand-rolled SVG in `js/core/charts.js` —
+  colour comes from CSS custom properties, so the palette re-themes every chart
+  without a redraw. Balances are hidden behind dots by default and re-hide
+  themselves 25 seconds after a tap — it is a wall display. Charts stay visible
+  while amounts are hidden: the shape of your spending is not the secret.
 
 ## Configuration
 

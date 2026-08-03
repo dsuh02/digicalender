@@ -328,8 +328,19 @@ def insights(months: int = 6) -> dict:
     total = sum(float(c["total"] or 0) for c in cats)
 
     # This month vs last, the comparison every banking app leads with.
-    this_month = flow[-1] if flow else None
-    prev_month = flow[-2] if len(flow) > 1 else None
+    #
+    # Keyed on the actual calendar month, NOT flow[-1]. The series is dense now,
+    # but relying on position would resurrect the bug where a current month with
+    # no transactions let the previous month pose as "this month" — and made the
+    # delta compare the two months before it while claiming otherwise.
+    now_key = store.now_iso()[:7]
+    keys = [f["month"] for f in flow]
+    # Position found by month STRING, not by searching for the row: dict
+    # equality would happily match a different month that happened to have
+    # identical totals.
+    idx = keys.index(now_key) if now_key in keys else -1
+    this_month = flow[idx] if idx >= 0 else None
+    prev_month = flow[idx - 1] if idx > 0 else None
     spent_now = float(this_month["money_out"] or 0) if this_month else 0.0
     spent_prev = float(prev_month["money_out"] or 0) if prev_month else None
 
@@ -359,7 +370,7 @@ def insights(months: int = 6) -> dict:
             "name": m["merchant"] or "Unknown",
             "total": round(float(m["total"] or 0), 2),
             "count": m["n"],
-        } for m in store.finance_top_merchants(1, 8)],
+        } for m in store.finance_top_merchants(months, 8)],
         "transaction_count": store.count_finance_transactions(),
     }
 

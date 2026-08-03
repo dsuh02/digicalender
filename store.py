@@ -1059,16 +1059,26 @@ def finance_cashflow_by_month(months: int = 6) -> list[dict]:
     Transfers are excluded from BOTH directions — moving $500 to savings is not
     income and not spending, and counting it inflates each side equally.
     """
+    # generate_series, not GROUP BY alone: a month with no transactions must
+    # come back as a zero row, not vanish. Dropping it silently shifts the bar
+    # chart's x axis and makes the newest month with data masquerade as the
+    # current one.
     return q("""
-        SELECT substring(posted_on, 1, 7) AS month,
-               SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) AS money_in,
-               SUM(CASE WHEN amount > 0 THEN  amount ELSE 0 END) AS money_out
-        FROM finance_transactions
-        WHERE category <> ALL(%s)
-          AND posted_on >= to_char(
-                date_trunc('month', now() - (%s || ' months')::interval), 'YYYY-MM-DD')
-        GROUP BY 1 ORDER BY 1
-    """, (NON_SPEND, months - 1), fetch="all")
+        WITH span AS (
+            SELECT to_char(generate_series(
+                       date_trunc('month', now() - (%s || ' months')::interval),
+                       date_trunc('month', now()),
+                       interval '1 month'), 'YYYY-MM') AS month
+        )
+        SELECT s.month,
+               COALESCE(SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END), 0) AS money_in,
+               COALESCE(SUM(CASE WHEN t.amount > 0 THEN  t.amount ELSE 0 END), 0) AS money_out
+        FROM span s
+        LEFT JOIN finance_transactions t
+               ON substring(t.posted_on, 1, 7) = s.month
+              AND t.category <> ALL(%s)
+        GROUP BY s.month ORDER BY s.month
+    """, (months - 1, NON_SPEND), fetch="all")
 
 
 def finance_top_merchants(months: int = 1, limit: int = 8) -> list[dict]:

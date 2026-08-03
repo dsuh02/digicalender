@@ -910,8 +910,14 @@ async function renderMoney() {
         el('button.btn.btn-small', {
           text: 'Unlink', onclick: () => {
             close();
+            // On Plaid's free Trial plan the 10-Item allowance is consumed for
+            // good: /item/remove revokes access but does NOT return the slot.
+            // Say so before the tap, not after — it cannot be undone.
+            const note = data.env === 'production'
+              ? ' On Plaid’s free Trial plan this does NOT free up one of your 10 connections — that allowance is used permanently.'
+              : '';
             confirmSheet('Unlink this institution?',
-              `Its accounts disappear from the panel and access is revoked at Plaid. Anything you typed by hand is untouched.`,
+              `Its accounts disappear from the panel and access is revoked at Plaid. Anything you typed by hand is untouched.${note}`,
               async () => {
                 try { await api.deleteFinanceItem(it.id); } catch (e) { toast(e.message, true); }
                 openSettings('Money');

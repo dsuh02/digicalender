@@ -576,91 +576,149 @@ button.src-dot-btn:active { background-color: var(--surface-3); background-clip:
 }
 .bill-when.soon { color: var(--danger); font-weight: 600; }
 
-.networth { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.nw-label { font-size: 11px; font-weight: 600; letter-spacing: .09em;
-            text-transform: uppercase; color: var(--text-3); }
+/* Sized against the WIDGET, not the viewport: vh made this widget's type
+   identical whether it was a sliver or half the wall. container-type: size
+   lets cqh mean "percent of this box". */
+.networth { flex: 1; min-height: 0; display: flex; flex-direction: column;
+            overflow: hidden; container-type: size; }
+.nw-label { font-size: clamp(9px, 4.5cqh, 12px); font-weight: 600; letter-spacing: .09em;
+            text-transform: uppercase; color: var(--text-3);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nw-value {
-  font-size: clamp(26px, 5.5vh, 46px); font-weight: 300; letter-spacing: -.02em;
-  line-height: 1.1; margin-top: 4px; font-variant-numeric: tabular-nums;
+  font-size: clamp(18px, 15cqh, 46px); font-weight: 300; letter-spacing: -.02em;
+  line-height: 1.1; margin-top: 3px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.nw-change { font-size: 12px; color: var(--good); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.nw-change { font-size: clamp(10px, 4.6cqh, 14px); color: var(--good); margin-top: 2px;
+             font-variant-numeric: tabular-nums;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nw-change.down { color: var(--warn); }
-.spark { width: 100%; height: 46px; margin: 10px 0 4px; flex: none; overflow: visible; }
-.spark-line { fill: none; stroke: var(--primary); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
-.spark-fill { fill: color-mix(in srgb, var(--primary) 12%, transparent); stroke: none; }
-.nw-split { display: flex; gap: 24px; margin-top: auto; padding-top: 8px; }
-.nw-split-k { font-size: 11px; color: var(--text-3); }
-.nw-split-v { font-size: 15px; font-variant-numeric: tabular-nums; }
+.spark-host { flex: 1 1 auto; min-height: 12px; margin: 8px 0 4px; overflow: hidden; }
+.nw-split { display: flex; gap: clamp(10px, 6cqw, 26px); margin-top: auto;
+            padding-top: 6px; flex: none; }
+.nw-split-k { font-size: clamp(9px, 4cqh, 12px); color: var(--text-3); }
+.nw-split-v { font-size: clamp(12px, 6cqh, 18px); font-variant-numeric: tabular-nums;
+              white-space: nowrap; }
 .nw-split-v.debt { color: var(--warn); }
+/* Short box: the trend and the split go before the number shrinks. */
+@container (max-height: 130px) {
+  .spark-host, .nw-split { display: none; }
+}
+@container (max-height: 88px) {
+  .nw-label, .nw-change { display: none; }
+}
 
 /* ------------------------------------------------------------- charts ---
- * Ink only. Every colour is a CSS variable, so a palette change re-themes
- * every chart with no redraw. Strokes use vector-effect so a viewBox that
- * stretches with the widget never thickens a 1px line into a 4px one.
+ * Charts render at MEASURED pixel size (see core/charts.js), so nothing here
+ * scales the drawing — 1 SVG unit is 1 CSS pixel and tick text is already the
+ * size it claims to be. Font sizes on .chart-tick come from the JS, which knows
+ * the box; the rule below is only a fallback.
+ *
+ * Widget typography uses container query units, NOT vh. A widget's legibility
+ * depends on the widget's size, not the screen's — the same box on the same
+ * screen can be a sliver or half the wall.
  */
-.chart { display: block; width: 100%; overflow: visible; }
+.chart { display: block; }
 .chart-line { stroke-width: 2; vector-effect: non-scaling-stroke;
               stroke-linejoin: round; stroke-linecap: round; }
 .chart-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .chart-zero { stroke: var(--line-strong); }
-.chart-tick { fill: var(--text-3); font-size: 9px; font-variant-numeric: tabular-nums; }
+.chart-tick { fill: var(--text-3); font-size: 10px; font-variant-numeric: tabular-nums; }
 .chart-cursor { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 3 3;
                 vector-effect: non-scaling-stroke; pointer-events: none; }
 .chart-dot { fill: var(--bg); stroke-width: 2; vector-effect: non-scaling-stroke;
              pointer-events: none; }
-.chart-bar { transition: opacity .12s ease; }
 .chart-donut-empty { stroke: var(--line); }
 .chart-gauge-track { opacity: .5; }
-.chart-area, .chart-bars { flex: none; margin-top: 6px; }
-/* The plot owns horizontal drags so the pager can't steal a scrub as a
-   two-finger page swipe. */
-.chart-area, .chart-bars, .chart-donut { touch-action: none; }
+/* The plot owns its gestures so the pager cannot steal a scrub as a page swipe. */
+.chart-host { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex;
+              align-items: center; justify-content: center; touch-action: none;
+              overflow: hidden; }
 
+/* container-type: size lets descendants ask how big THIS widget is. Requires a
+   definite size, which every grid cell has. */
 .insight { flex: 1; min-height: 0; display: flex; flex-direction: column;
-           overflow: hidden; gap: 2px; }
-.insight-centre { align-items: center; justify-content: center; }
-.insight-head { flex: none; }
-.insight-label { font-size: 11px; font-weight: 600; letter-spacing: .09em;
-                 text-transform: uppercase; color: var(--text-3); }
-.insight-value { font-size: clamp(22px, 4.4vh, 36px); font-weight: 300;
-                 letter-spacing: -.02em; line-height: 1.15; margin-top: 3px;
-                 font-variant-numeric: tabular-nums; }
+           overflow: hidden; gap: 2px; container-type: size; }
+.insight-centre { align-items: stretch; }
+.insight-head { flex: 0 0 auto; }
+.insight-label { font-size: clamp(9px, 4.5cqh, 12px); font-weight: 600;
+                 letter-spacing: .09em; text-transform: uppercase; color: var(--text-3);
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.insight-value { font-size: clamp(17px, 13cqh, 46px); font-weight: 300;
+                 letter-spacing: -.02em; line-height: 1.12; margin-top: 2px;
+                 font-variant-numeric: tabular-nums;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .insight-value.debt { color: var(--warn); }
-.insight-sub { font-size: 12px; color: var(--text-3); margin-top: 3px;
-               font-variant-numeric: tabular-nums; }
-.insight-delta { font-size: 12px; margin-top: 3px; font-variant-numeric: tabular-nums;
-                 color: var(--text-2); min-height: 1em; }
+.insight-sub { font-size: clamp(10px, 4.6cqh, 14px); color: var(--text-3);
+               margin-top: 2px; font-variant-numeric: tabular-nums;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
+.insight-delta { font-size: clamp(10px, 4.6cqh, 14px); margin-top: 2px;
+                 font-variant-numeric: tabular-nums; color: var(--text-2);
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .insight-delta.down { color: var(--good); }
 .insight-delta.up { color: var(--warn); }
 
-.insight-list { flex: 1; min-height: 0; overflow-y: auto; touch-action: pan-y;
-                margin-top: 8px; display: flex; flex-direction: column; gap: 7px; }
-.bar-row { display: grid; grid-template-columns: minmax(56px, 1fr) 2fr auto;
-           align-items: center; gap: 9px; }
-.bar-row-k { font-size: 12px; color: var(--text-2); white-space: nowrap;
-             overflow: hidden; text-overflow: ellipsis; }
-.bar-row-track { height: 7px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
-.bar-row-fill { height: 100%; border-radius: 4px; }
-.bar-row-v { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text); }
+/* Short boxes: the label and the sub-line are the first things to go, so the
+   number itself keeps its size instead of everything shrinking together. */
+@container (max-height: 120px) {
+  .insight-label, .insight-delta, .insight-sub { display: none; }
+  .insight-value { font-size: clamp(15px, 30cqh, 34px); }
+}
+@container (max-height: 74px) {
+  .chart-host { display: none; }
+}
 
-.donut-wrap, .gauge-wrap { position: relative; display: flex; align-items: center;
-                           justify-content: center; flex: none; margin: 4px 0; }
-.donut-wrap .chart, .gauge-wrap .chart { max-height: 34vh; }
+.insight-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; touch-action: pan-y;
+                margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.bar-row { display: grid; grid-template-columns: minmax(48px, 1fr) 2fr auto;
+           align-items: center; gap: 8px; }
+.bar-row-k { font-size: clamp(10px, 4.4cqh, 14px); color: var(--text-2);
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar-row-track { height: clamp(5px, 2.4cqh, 9px); background: var(--surface-2);
+                 border-radius: 4px; overflow: hidden; }
+.bar-row-fill { height: 100%; border-radius: 4px; }
+.bar-row-v { font-size: clamp(10px, 4.4cqh, 14px); font-variant-numeric: tabular-nums;
+             color: var(--text); }
+/* Narrow boxes cannot carry three columns; the bar is the first to go. */
+@container (max-width: 210px) {
+  .bar-row { grid-template-columns: 1fr auto; }
+  .bar-row-track { display: none; }
+}
+
+.donut-layout { display: flex; align-items: center; justify-content: center;
+                gap: 10px; width: 100%; height: 100%; }
+.donut-layout.side { flex-direction: row; }
+.donut-layout.stacked { flex-direction: column; gap: 6px; }
+.donut-wrap, .gauge-wrap { position: relative; flex: none;
+                           display: flex; align-items: center; justify-content: center; }
+.gauge-wrap { width: 100%; height: 100%; }
 .donut-centre, .gauge-centre {
   position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; pointer-events: none; text-align: center;
+  align-items: center; justify-content: center; pointer-events: none;
+  text-align: center; padding: 12%;
 }
-.donut-centre-k, .gauge-k { font-size: 10px; text-transform: uppercase;
-                            letter-spacing: .08em; color: var(--text-3); }
-.donut-centre-v { font-size: 17px; font-variant-numeric: tabular-nums; margin-top: 2px; }
-.donut-centre-s { font-size: 10px; color: var(--text-3); margin-top: 2px; }
-.gauge-v { font-size: 30px; font-weight: 300; font-variant-numeric: tabular-nums; }
+.gauge-bare { display: flex; flex-direction: column; align-items: center;
+              justify-content: center; width: 100%; height: 100%; }
+.donut-centre-k, .gauge-k { font-size: clamp(8px, 3.6cqh, 12px); text-transform: uppercase;
+                            letter-spacing: .08em; color: var(--text-3);
+                            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                            max-width: 100%; }
+.donut-centre-v { font-size: clamp(12px, 6.5cqh, 24px); font-variant-numeric: tabular-nums;
+                  margin-top: 2px; white-space: nowrap; }
+.donut-centre-s { font-size: clamp(8px, 3.4cqh, 12px); color: var(--text-3);
+                  margin-top: 1px; white-space: nowrap; }
+.gauge-v { font-size: clamp(18px, 11cqh, 44px); font-weight: 300;
+           font-variant-numeric: tabular-nums; line-height: 1.05; }
 
-.legend { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 8px; flex: none; }
-.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; }
-.legend-dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
-.legend-k { color: var(--text-2); }
-.legend-v { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 3px 12px; flex: 0 1 auto;
+          min-width: 0; overflow: hidden; align-content: center; }
+.donut-layout.side .legend { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; }
+.legend-item { display: flex; align-items: center; gap: 5px;
+               font-size: clamp(9px, 3.8cqh, 13px); min-width: 0; }
+.legend-dot { width: .7em; height: .7em; border-radius: 2px; flex: none; }
+.legend-k { color: var(--text-2); white-space: nowrap; overflow: hidden;
+            text-overflow: ellipsis; }
+.legend-v { color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; }
 
 .link-url {
   display: block; margin: 8px 0; padding: 10px 12px;

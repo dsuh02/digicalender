@@ -5,16 +5,22 @@
  * won't render because a CDN is unreachable is worse than a few hundred lines of
  * path arithmetic.
  *
- * Three rules everything here follows:
+ * **These charts render at measured pixel size, not into a fixed viewBox.**
+ * That is the whole design. A widget on this grid can be 240×200 or 1900×1080
+ * and any aspect ratio in between, and a fixed viewBox scales the drawing as one
+ * unit — so the axis labels balloon in a big box, turn to mush in a small one,
+ * and the plot letterboxes the moment the box is not the shape the viewBox
+ * assumed. Measuring costs a ResizeObserver and a frame; it buys a chart that is
+ * legible at every size, which is the point.
  *
- * 1. **Colour comes from CSS custom properties**, never literals. A chart drawn
- *    with `var(--c-3)` re-themes itself the instant the palette changes, with no
- *    redraw and no JS listening for it.
- * 2. **Geometry is viewBox-relative.** Widgets are resized by dragging on a
- *    grid; charts that measure pixels need a ResizeObserver and still lag a
- *    frame behind. A viewBox scales for free.
- * 3. **Touch targets are separate from ink.** A 1px line is unhittable with a
- *    finger, so interactive charts lay invisible wide hit strips over the top.
+ * Consequences worth knowing:
+ *   - One SVG user unit == one CSS pixel. Font sizes are real pixels.
+ *   - Detail is a function of size: tick counts, label thinning, and whether
+ *     there are axes at all are all decided from the measured box.
+ *   - Colour is always a CSS custom property, never a literal, so a palette
+ *     change re-themes every chart with no redraw.
+ *   - Touch targets are separate from ink: a 2px line is unhittable with a
+ *     finger, so interactive charts lay invisible hit areas over the top.
  */
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -36,31 +42,83 @@ function n(name, attrs = {}, children = []) {
   return node;
 }
 
-function svgRoot(w, h, cls, { stretch = false } = {}) {
-  const s = n('svg', {
-    viewBox: `0 0 ${w} ${h}`,
-    class: cls,
-    // Charts with axis text must keep their aspect ratio or the labels shear;
-    // sparklines are pure shape and look better filling the box.
-    preserveAspectRatio: stretch ? 'none' : 'xMidYMid meet',
-  });
-  return s;
+function svgRoot(w, h, cls) {
+  // viewBox matches the measured box exactly, so nothing is scaled and text
+  // renders at the size it says it is.
+  return n('svg', { viewBox: `0 0 ${w} ${h}`, width: w, height: h, class: cls });
 }
 
-/** Catmull-Rom → cubic bezier. Financial series look wrong with hard corners. */
-function smoothPath(pts, tension = 0.5) {
+/**
+ * Render `draw(width, height)` into `host`, re-rendering when its size changes.
+ *
+ * Returns a teardown function. Resize bursts (a widget being dragged) are
+ * coalesced into one render per frame, and identical sizes are skipped, so a
+ * drag that does not change the box costs nothing.
+ */
+export function autoSize(host, draw) {
+  let frame = null;
+  let last = '';
+  const render = () => {
+    frame = null;
+    const w = Math.floor(host.clientWidth);
+    const h = Math.floor(host.clientHeight);
+    if (w < 2 || h < 2) return;                 // display:none, or mid-layout
+    const key = `${w}x${h}`;
+    if (key === last) return;
+    last = key;
+    while (host.firstChild) host.removeChild(host.firstChild);
+    const node = draw(w, h);
+    if (node) host.append(node);
+  };
+  // rAF, so measurement happens after layout rather than inside the observer
+  // callback, where clientWidth can still be the pre-resize value.
+  const ro = new ResizeObserver(() => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(render);
+  });
+  ro.observe(host);
+  render();
+  return () => {
+    ro.disconnect();
+    if (frame) cancelAnimationFrame(frame);
+  };
+}
+
+/** Force the next autoSize render even if the box has not changed. */
+export function invalidate(host) {
+  host.__chartKey = '';
+}
+
+/* ------------------------------------------------------------------ scale */
+
+/**
+ * Catmull-Rom → cubic bezier. Financial series look wrong with hard corners.
+ *
+ * `bounds` is not optional decoration: Catmull-Rom control points are
+ * extrapolated from the NEIGHBOURING points, so a spike makes the curve
+ * overshoot past the highest value — and in a tall narrow box that overshoot
+ * leaves the plot area entirely and paints over the axis. Clamping each control
+ * point to the band keeps the curve inside without flattening it.
+ */
+function smoothPath(pts, tension = 0.5, bounds = null) {
   if (pts.length < 2) return '';
   if (pts.length === 2) return `M${pts[0][0]},${pts[0][1]} L${pts[1][0]},${pts[1][1]}`;
+  const clampY = bounds
+    ? (v) => Math.max(bounds.y0, Math.min(bounds.y1, v))
+    : (v) => v;
+  const clampX = bounds
+    ? (v) => Math.max(bounds.x0, Math.min(bounds.x1, v))
+    : (v) => v;
   let d = `M${pts[0][0]},${pts[0][1]}`;
   for (let i = 0; i < pts.length - 1; i++) {
     const p0 = pts[i - 1] || pts[i];
     const p1 = pts[i];
     const p2 = pts[i + 1];
     const p3 = pts[i + 2] || p2;
-    const c1x = p1[0] + ((p2[0] - p0[0]) / 6) * tension;
-    const c1y = p1[1] + ((p2[1] - p0[1]) / 6) * tension;
-    const c2x = p2[0] - ((p3[0] - p1[0]) / 6) * tension;
-    const c2y = p2[1] - ((p3[1] - p1[1]) / 6) * tension;
+    const c1x = clampX(p1[0] + ((p2[0] - p0[0]) / 6) * tension);
+    const c1y = clampY(p1[1] + ((p2[1] - p0[1]) / 6) * tension);
+    const c2x = clampX(p2[0] - ((p3[0] - p1[0]) / 6) * tension);
+    const c2y = clampY(p2[1] - ((p3[1] - p1[1]) / 6) * tension);
     d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`;
   }
   return d;
@@ -85,32 +143,52 @@ export function compactMoney(v) {
   return `${sign}$${Math.round(a)}`;
 }
 
+/**
+ * What this box can carry.
+ *
+ * Every adaptive decision lives here rather than being sprinkled through the
+ * chart functions, so "what does a short wide box do" has one answer to read.
+ */
+export function fit(w, h) {
+  // Type scales gently with the box, then stops. Below 9px it is unreadable on
+  // a wall; above ~15px it stops looking like a label and starts competing with
+  // the value it annotates.
+  const font = Math.max(9, Math.min(15, Math.round(Math.min(w, h) / 16)));
+  // Axes need room for their own labels plus a plot worth looking at. Under
+  // these thresholds the shape alone says more than a cramped, half-labelled
+  // grid.
+  const axis = w >= 190 && h >= 105;
+  const yTicks = h < 130 ? 2 : h < 220 ? 3 : h < 340 ? 4 : 5;
+  return {
+    font, axis, yTicks,
+    dense: w >= 420 && h >= 240,
+    tiny: w < 140 || h < 70,
+    pad: Math.max(2, Math.round(font * 0.4)),
+  };
+}
+
+/** Rough text width. No DOM measurement — this runs per label, per frame. */
+const textWidth = (s, font) => String(s).length * font * 0.58;
+
 /* ------------------------------------------------------------------ area */
 
 /**
  * Area/line chart for one or more series over a shared x axis.
- *
- * opts.series: [{ key, label, values:[n], color, fill? }]
- * opts.labels: x tick labels, same length as values
- * opts.onHover(index|null) — called as a finger moves across the plot
+ * `width`/`height` are CSS pixels, normally from autoSize().
  */
 export function areaChart(opts) {
   const {
     series = [], labels = [], width = 320, height = 140,
-    yTicks = 4, showAxis = true, smooth = true, baseline = null,
+    showAxis = null, smooth = true, baseline = null,
     onHover = null, format = compactMoney,
   } = opts;
 
+  const F = fit(width, height);
   const live = series.filter(s => (s.values || []).some(v => Number.isFinite(v)));
   const svg = svgRoot(width, height, 'chart chart-area');
   if (!live.length) return svg;
 
-  const padL = showAxis ? 34 : 2;
-  const padR = 2;
-  const padT = 6;
-  const padB = showAxis && labels.length ? 16 : 4;
-  const pw = width - padL - padR;
-  const ph = height - padT - padB;
+  const axis = showAxis === null ? F.axis : (showAxis && F.axis);
 
   const all = live.flatMap(s => s.values).filter(Number.isFinite);
   let lo = Math.min(...all);
@@ -119,16 +197,31 @@ export function areaChart(opts) {
   // exaggerates every wobble into a cliff.
   if (baseline !== null) { lo = Math.min(lo, baseline); hi = Math.max(hi, baseline); }
   if (lo === hi) { lo -= 1; hi += 1; }
-  const step = niceStep(hi - lo, yTicks);
+  const step = niceStep(hi - lo, F.yTicks);
   lo = Math.floor(lo / step) * step;
   hi = Math.ceil(hi / step) * step;
+
+  // Gutter sized to the widest label this axis will actually print, so a chart
+  // of millions is not clipped and a chart of tens is not padded for nothing.
+  let padL = F.pad;
+  if (axis) {
+    let widest = 0;
+    for (let v = lo; v <= hi + 1e-9; v += step) {
+      widest = Math.max(widest, textWidth(format(v), F.font));
+    }
+    padL = Math.min(width * 0.34, widest + F.font * 0.7);
+  }
+  const padR = F.pad + 1;
+  const padT = Math.round(F.font * 0.7);
+  const padB = axis && labels.length ? F.font + F.pad + 2 : F.pad;
+  const pw = Math.max(1, width - padL - padR);
+  const ph = Math.max(1, height - padT - padB);
 
   const len = Math.max(...live.map(s => s.values.length));
   const X = i => padL + (len === 1 ? pw / 2 : (i / (len - 1)) * pw);
   const Y = v => padT + ph - ((v - lo) / (hi - lo)) * ph;
 
-  // gridlines + y labels
-  if (showAxis) {
+  if (axis) {
     for (let v = lo; v <= hi + 1e-9; v += step) {
       const y = Y(v);
       svg.append(n('line', {
@@ -136,7 +229,8 @@ export function areaChart(opts) {
         class: Math.abs(v) < 1e-9 ? 'chart-grid chart-zero' : 'chart-grid',
       }));
       svg.append(n('text', {
-        x: padL - 4, y: (y + 3).toFixed(2), class: 'chart-tick', 'text-anchor': 'end',
+        x: (padL - F.pad).toFixed(2), y: (y + F.font * 0.34).toFixed(2),
+        class: 'chart-tick chart-tick-y', 'text-anchor': 'end', 'font-size': F.font,
       }, document.createTextNode(format(v))));
     }
   }
@@ -144,14 +238,17 @@ export function areaChart(opts) {
   live.forEach((s, si) => {
     const color = s.color || seriesColor(si);
     const pts = s.values.map((v, i) => [X(i), Y(Number.isFinite(v) ? v : lo)]);
-    const d = smooth ? smoothPath(pts) : `M${pts.map(p => `${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' L')}`;
+    const band = { x0: padL, x1: width - padR, y0: padT, y1: padT + ph };
+    const d = smooth ? smoothPath(pts, 0.5, band)
+                     : `M${pts.map(p => `${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' L')}`;
     if (s.fill !== false) {
-      const gid = `g${Math.abs(hashish(s.key || String(si)))}`;
-      const grad = n('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 }, [
-        n('stop', { offset: '0%', 'stop-color': color, 'stop-opacity': 0.28 }),
-        n('stop', { offset: '100%', 'stop-color': color, 'stop-opacity': 0 }),
-      ]);
-      svg.append(n('defs', {}, [grad]));
+      const gid = `g${Math.abs(hashish((s.key || String(si)) + width + height))}`;
+      svg.append(n('defs', {}, [
+        n('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 }, [
+          n('stop', { offset: '0%', 'stop-color': color, 'stop-opacity': 0.28 }),
+          n('stop', { offset: '100%', 'stop-color': color, 'stop-opacity': 0 }),
+        ]),
+      ]));
       svg.append(n('path', {
         d: `${d} L${X(len - 1).toFixed(2)},${(padT + ph).toFixed(2)} L${X(0).toFixed(2)},${(padT + ph).toFixed(2)} Z`,
         fill: `url(#${gid})`, stroke: 'none',
@@ -160,13 +257,17 @@ export function areaChart(opts) {
     svg.append(n('path', { d, fill: 'none', stroke: color, class: 'chart-line' }));
   });
 
-  // x labels — thinned so they never collide
-  if (showAxis && labels.length) {
-    const every = Math.ceil(labels.length / Math.max(2, Math.floor(pw / 42)));
+  // x labels, thinned by MEASURED width so they never collide at any size
+  if (axis && labels.length) {
+    const need = Math.max(...labels.map(t => textWidth(t, F.font))) + F.font;
+    const every = Math.max(1, Math.ceil(labels.length / Math.max(2, Math.floor(pw / need))));
     labels.forEach((t, i) => {
       if (i % every !== 0 && i !== labels.length - 1) return;
+      // Drop a penultimate label that would touch the last one.
+      if (i !== labels.length - 1 && X(labels.length - 1) - X(i) < need) return;
       svg.append(n('text', {
-        x: X(i).toFixed(2), y: height - 4, class: 'chart-tick',
+        x: X(i).toFixed(2), y: (height - F.pad).toFixed(2),
+        class: 'chart-tick chart-tick-x', 'font-size': F.font,
         'text-anchor': i === 0 ? 'start' : i === labels.length - 1 ? 'end' : 'middle',
       }, document.createTextNode(t)));
     });
@@ -174,7 +275,7 @@ export function areaChart(opts) {
 
   if (onHover) {
     const cursor = n('line', { class: 'chart-cursor', y1: padT, y2: padT + ph, x1: 0, x2: 0, opacity: 0 });
-    const dot = n('circle', { class: 'chart-dot', r: 3.5, cx: 0, cy: 0, opacity: 0 });
+    const dot = n('circle', { class: 'chart-dot', r: Math.max(3, F.font * 0.34), cx: 0, cy: 0, opacity: 0 });
     svg.append(cursor, dot);
     const hit = n('rect', { x: padL, y: padT, width: pw, height: ph, fill: 'transparent' });
     svg.append(hit);
@@ -235,28 +336,43 @@ function hashish(s) {
  */
 export function barChart(opts) {
   const {
-    groups = [], width = 320, height = 140, showAxis = true,
+    groups = [], width = 320, height = 140, showAxis = null,
     format = compactMoney, onHover = null, signed = false,
   } = opts;
 
+  const F = fit(width, height);
   const svg = svgRoot(width, height, 'chart chart-bars');
   if (!groups.length) return svg;
-
-  const padL = showAxis ? 34 : 2;
-  const padR = 2, padT = 6, padB = 16;
-  const pw = width - padL - padR;
-  const ph = height - padT - padB;
+  const axis = showAxis === null ? F.axis : (showAxis && F.axis);
 
   const all = groups.flatMap(g => g.values).filter(Number.isFinite);
   let hi = Math.max(0, ...all);
   let lo = signed ? Math.min(0, ...all) : 0;
   if (hi === lo) hi = lo + 1;
-  const step = niceStep(hi - lo, 3);
+  const step = niceStep(hi - lo, Math.min(3, F.yTicks));
   hi = Math.ceil(hi / step) * step;
   lo = Math.floor(lo / step) * step;
+
+  let padL = F.pad;
+  if (axis) {
+    let widest = 0;
+    for (let v = lo; v <= hi + 1e-9; v += step) {
+      widest = Math.max(widest, textWidth(format(v), F.font));
+    }
+    padL = Math.min(width * 0.34, widest + F.font * 0.7);
+  }
+  const padR = F.pad + 1;
+  const padT = Math.round(F.font * 0.7);
+  // Group labels are dropped rather than overlapped when the slots get narrow.
+  const slotW = (width - padL - padR) / groups.length;
+  const labelFits = slotW > Math.max(...groups.map(g => textWidth(g.label, F.font))) + 3;
+  const showLabels = axis && labelFits;
+  const padB = showLabels ? F.font + F.pad + 2 : F.pad;
+  const pw = Math.max(1, width - padL - padR);
+  const ph = Math.max(1, height - padT - padB);
   const Y = v => padT + ph - ((v - lo) / (hi - lo)) * ph;
 
-  if (showAxis) {
+  if (axis) {
     for (let v = lo; v <= hi + 1e-9; v += step) {
       const y = Y(v);
       svg.append(n('line', {
@@ -264,35 +380,39 @@ export function barChart(opts) {
         class: Math.abs(v) < 1e-9 ? 'chart-grid chart-zero' : 'chart-grid',
       }));
       svg.append(n('text', {
-        x: padL - 4, y: (y + 3).toFixed(2), class: 'chart-tick', 'text-anchor': 'end',
+        x: (padL - F.pad).toFixed(2), y: (y + F.font * 0.34).toFixed(2),
+        class: 'chart-tick chart-tick-y', 'text-anchor': 'end', 'font-size': F.font,
       }, document.createTextNode(format(v))));
     }
   }
 
   const slot = pw / groups.length;
   const per = Math.max(1, groups[0].values.length);
-  const gap = Math.min(4, slot * 0.14);
-  const bw = Math.max(2, (slot - gap * 2) / per - 1.5);
+  const gap = Math.min(slot * 0.16, F.font * 0.5);
+  const inner = Math.max(0.5, Math.min(1.5, slot * 0.03));
+  const bw = Math.max(1.5, (slot - gap * 2 - inner * (per - 1)) / per);
 
   groups.forEach((g, gi) => {
     g.values.forEach((v, vi) => {
       // Skip zero outright. The minimum height below keeps a small-but-real
-      // amount visible, and applying it to zero would paint a 1px sliver on the
+      // amount visible, and applying it to zero would paint a sliver on the
       // baseline that reads as a rendering artefact rather than "no activity".
       if (!Number.isFinite(v) || v === 0) return;
-      const x = padL + gi * slot + gap + vi * (bw + 1.5);
+      const x = padL + gi * slot + gap + vi * (bw + inner);
       const y0 = Y(0), y1 = Y(v);
       svg.append(n('rect', {
         x: x.toFixed(2), y: Math.min(y0, y1).toFixed(2),
         width: bw.toFixed(2), height: Math.max(1, Math.abs(y1 - y0)).toFixed(2),
-        rx: Math.min(2.5, bw / 2), fill: (g.colors || [])[vi] || seriesColor(vi),
+        rx: Math.min(3, bw / 2.5), fill: (g.colors || [])[vi] || seriesColor(vi),
         class: 'chart-bar',
       }));
     });
-    svg.append(n('text', {
-      x: (padL + gi * slot + slot / 2).toFixed(2), y: height - 4,
-      class: 'chart-tick', 'text-anchor': 'middle',
-    }, document.createTextNode(g.label)));
+    if (showLabels) {
+      svg.append(n('text', {
+        x: (padL + gi * slot + slot / 2).toFixed(2), y: (height - F.pad).toFixed(2),
+        class: 'chart-tick chart-tick-x', 'text-anchor': 'middle', 'font-size': F.font,
+      }, document.createTextNode(g.label)));
+    }
   });
 
   if (onHover) {
@@ -311,18 +431,27 @@ export function barChart(opts) {
 /* ------------------------------------------------------------------ donut */
 
 /**
- * Donut with a free centre for a total.
- * opts.slices: [{ label, value, color }]
+ * Donut with a free centre for a total. Fills the box it is given: `size` is
+ * derived from the smaller dimension so it never overflows a lopsided widget.
  */
 export function donut(opts) {
-  const { slices = [], size = 120, thickness = 16, onHover = null, gap = 0.018 } = opts;
-  const svg = svgRoot(size, size, 'chart chart-donut');
+  const {
+    slices = [], width = 120, height = 120, onHover = null, gap = 0.018,
+    thickness = null,
+  } = opts;
+  const size = Math.max(24, Math.min(width, height));
+  const svg = svgRoot(width, height, 'chart chart-donut');
   const total = slices.reduce((a, s) => a + Math.max(0, s.value || 0), 0);
-  const r = (size - thickness) / 2;
-  const cx = size / 2, cy = size / 2;
+  // Ring thickness is a fraction of the radius, so a big donut does not become
+  // a thin wire and a small one does not close up into a disc.
+  const th = thickness ?? Math.max(6, Math.min(size * 0.22, 40));
+  const r = (size - th) / 2;
+  const cx = width / 2, cy = height / 2;
 
   if (total <= 0) {
-    svg.append(n('circle', { cx, cy, r, class: 'chart-donut-empty', fill: 'none', 'stroke-width': thickness }));
+    svg.append(n('circle', {
+      cx, cy, r, class: 'chart-donut-empty', fill: 'none', 'stroke-width': th,
+    }));
     return svg;
   }
 
@@ -338,9 +467,9 @@ export function donut(opts) {
     const x1 = cx + r * Math.cos(s1), y1 = cy + r * Math.sin(s1);
     const large = (s1 - s0) > Math.PI ? 1 : 0;
     const path = n('path', {
-      d: `M${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`,
+      d: `M${x0.toFixed(2)},${y0.toFixed(2)} A${r.toFixed(2)},${r.toFixed(2)} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`,
       fill: 'none', stroke: s.color || seriesColor(i),
-      'stroke-width': thickness, 'stroke-linecap': 'butt', class: 'chart-arc',
+      'stroke-width': th, 'stroke-linecap': 'butt', class: 'chart-arc',
     });
     if (onHover) {
       path.addEventListener('pointerdown', (e) => { onHover(i); e.stopPropagation(); });
@@ -356,12 +485,14 @@ export function donut(opts) {
 /** 270° arc gauge — credit utilisation, savings rate, progress to a goal. */
 export function arcGauge(opts) {
   const {
-    value = 0, max = 100, size = 110, thickness = 11,
+    value = 0, max = 100, width = 110, height = 110, thickness = null,
     color = 'var(--primary)', track = true, sweep = 1.5 * Math.PI,
   } = opts;
-  const svg = svgRoot(size, size, 'chart chart-gauge');
-  const r = (size - thickness) / 2;
-  const cx = size / 2, cy = size / 2;
+  const size = Math.max(24, Math.min(width, height));
+  const svg = svgRoot(width, height, 'chart chart-gauge');
+  const th = thickness ?? Math.max(5, Math.min(size * 0.11, 22));
+  const r = (size - th) / 2;
+  const cx = width / 2, cy = height / 2;
   const start = Math.PI * 0.75;
   const frac = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
 
@@ -370,8 +501,8 @@ export function arcGauge(opts) {
     const x0 = cx + r * Math.cos(from), y0 = cy + r * Math.sin(from);
     const x1 = cx + r * Math.cos(to), y1 = cy + r * Math.sin(to);
     return n('path', {
-      d: `M${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${(to - from) > Math.PI ? 1 : 0} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`,
-      fill: 'none', stroke, 'stroke-width': thickness, 'stroke-linecap': 'round', class: cls,
+      d: `M${x0.toFixed(2)},${y0.toFixed(2)} A${r.toFixed(2)},${r.toFixed(2)} 0 ${(to - from) > Math.PI ? 1 : 0} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`,
+      fill: 'none', stroke, 'stroke-width': th, 'stroke-linecap': 'round', class: cls,
     });
   };
   if (track) svg.append(arc(start, start + sweep, 'chart-gauge-track', 'var(--line)'));
@@ -386,15 +517,16 @@ export function arcGauge(opts) {
 export function sparkline(values, opts = {}) {
   const { width = 100, height = 28, color = 'var(--primary)', fill = true } = opts;
   const vals = (values || []).filter(Number.isFinite);
-  const svg = svgRoot(width, height, 'chart chart-spark', { stretch: true });
+  const svg = svgRoot(width, height, 'chart chart-spark');
   if (vals.length < 2) return svg;
   const lo = Math.min(...vals), hi = Math.max(...vals);
   const span = (hi - lo) || 1;
+  const inset = 1.5;
   const pts = vals.map((v, i) => [
     (i / (vals.length - 1)) * width,
-    height - 1 - ((v - lo) / span) * (height - 2),
+    height - inset - ((v - lo) / span) * (height - inset * 2),
   ]);
-  const d = smoothPath(pts, 0.4);
+  const d = smoothPath(pts, 0.4, { x0: 0, x1: width, y0: inset, y1: height - inset });
   if (fill) {
     svg.append(n('path', {
       d: `${d} L${width},${height} L0,${height} Z`,

@@ -7,6 +7,7 @@
  */
 
 import { api, bus } from '../core/api.js';
+import { autoSize, sparkline } from '../core/charts.js';
 import { icon } from '../core/icons.js';
 import { clear, el, fromApi } from '../core/util.js';
 
@@ -137,6 +138,7 @@ export const NetWorthWidget = {
     host.append(body);
     let summary = null;
     let series = [];
+    let stopSize = null;
     const priv = privacy(host, ctx.settings);
 
     const load = async () => {
@@ -150,34 +152,9 @@ export const NetWorthWidget = {
       draw();
     };
 
-    const spark = () => {
-      // Inline SVG, no chart library: one path, sized by viewBox so it scales
-      // with the widget without a resize observer.
-      if (series.length < 2) return null;
-      const vals = series.map(p => Number(p.net) || 0);
-      const min = Math.min(...vals), max = Math.max(...vals);
-      const span = (max - min) || 1;
-      const pts = vals.map((v, i) => {
-        const x = (i / (vals.length - 1)) * 100;
-        const y = 30 - ((v - min) / span) * 28 - 1;
-        return `${x.toFixed(2)},${y.toFixed(2)}`;
-      });
-      const ns = 'http://www.w3.org/2000/svg';
-      const svg = document.createElementNS(ns, 'svg');
-      svg.setAttribute('viewBox', '0 0 100 30');
-      svg.setAttribute('preserveAspectRatio', 'none');
-      svg.setAttribute('class', 'spark');
-      const fill = document.createElementNS(ns, 'path');
-      fill.setAttribute('d', `M0,30 L${pts.join(' L')} L100,30 Z`);
-      fill.setAttribute('class', 'spark-fill');
-      const line = document.createElementNS(ns, 'path');
-      line.setAttribute('d', `M${pts.join(' L')}`);
-      line.setAttribute('class', 'spark-line');
-      svg.append(fill, line);
-      return svg;
-    };
 
     const draw = () => {
+      if (stopSize) { stopSize(); stopSize = null; }
       clear(body);
       if (!summary) {
         body.append(el('p.empty-hint', { text: 'No accounts yet — Settings › Money' }));
@@ -197,8 +174,17 @@ export const NetWorthWidget = {
           text: `${change >= 0 ? '+' : '−'}${money(Math.abs(change))} over ${n} day${n === 1 ? '' : 's'}`,
         }));
       }
-      const s = spark();
-      if (s) body.append(s);
+      // Drawn to measured pixels, not a fixed viewBox: this widget can be
+      // stretched to any shape, and a stretched viewBox distorts the line and
+      // the stroke with it.
+      if (series.length >= 2) {
+        const host = el('div.spark-host');
+        body.append(host);
+        stopSize = autoSize(host, (w, h) => sparkline(
+          series.map(p => Number(p.net) || 0),
+          { width: w, height: h, color: 'var(--primary)' },
+        ));
+      }
       if (ctx.settings.showSplit !== false) {
         body.append(el('div.nw-split', {}, [
           el('div', {}, [
@@ -216,7 +202,10 @@ export const NetWorthWidget = {
     priv.bind(draw);
     const off = bus.on('finance_changed', load);
     load();
-    return { refresh: load, destroy: () => { off(); priv.stop(); } };
+    return {
+      refresh: load,
+      destroy: () => { off(); priv.stop(); if (stopSize) stopSize(); },
+    };
   },
 };
 

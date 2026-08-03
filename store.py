@@ -7,8 +7,8 @@ Two halves:
   - the dashboard (pages, widgets, todos, notifications, devices, scenes),
     which turns this from a calendar into a wall hub.
 
-Connection: peer auth over the unix socket. The app runs as `panel` and connects
-as `panel`, so there is no password on disk or in the repo. Override with
+Connection: peer auth over the unix socket. The app runs as the same OS user
+it connects as, so there is no password on disk or in the repo. Override with
 DIGICALENDER_DSN if you ever move the database off-box.
 
 Two deliberate choices worth knowing before you edit this file:

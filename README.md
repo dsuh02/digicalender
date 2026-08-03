@@ -4,8 +4,8 @@ A touch wall hub: a configurable dashboard of resizable widgets on a fine-graine
 grid — calendars, to-dos, notifications, weather, and control of the Rokus,
 Govee plugs and Samsung TVs on the network.
 
-Built for `panelhost` — an a mini PC (Ubuntu 26.04) with a 1920×1080
-touch panel on HDMI.
+Built for a small always-on Ubuntu box driving a 1920×1080 HDMI touch panel on
+the wall, but nothing here assumes that hardware.
 
 **No pip, no build step.** Python stdlib plus `psycopg`, which comes from apt as
 `python3-psycopg`. Deliberate: the host runs Python 3.14 where wheels are still
@@ -42,8 +42,9 @@ deploy/install.sh      packages, database, systemd units, X config — run as ro
   reserved for the widgets. Page dots sit along the bottom edge.
 - **The top bar is hidden.** Pull down from the top edge and it slides in over
   the page (a thin bar at the top is the only hint it exists). It leaves after
-  7 seconds, or the moment you tap the content below it. While editing it stays
-  pinned, since it carries the edit controls.
+  7 seconds, or the moment you tap the content below it. The padlock is a plain
+  toggle, so the bar can leave while you are still editing — it used to pin
+  itself open and covered the very widgets you were trying to configure.
 
 ## Theme
 
@@ -89,6 +90,8 @@ unlock, so a passing brush can't rearrange the wall.
 | Info | Clock, Weather, Text label |
 | Productivity | To-do list, Notifications |
 | Home | Device tiles, Scenes, Roku remote, Media control |
+| Photos | Gallery (in-widget slideshow), Screensaver trigger |
+| Money | Accounts, Net worth, Upcoming bills |
 
 Every widget declares a settings schema; the options panel is generated from it,
 so adding a setting is a one-line change and never involves writing form markup.
@@ -121,9 +124,33 @@ limitation here — use `govee_cloud` with an API key from the Govee Home app
 Discovery (Settings → Devices → Scan network) probes all three concurrently.
 Rokus answer only when powered; Samsung TVs stop responding entirely when off.
 
+## Galleries, people and money
+
+Three things the dashboard grew into, each worth a note:
+
+- **Galleries** are folders of images under `galleries/`, one per set — **not in
+  git**. The database stores paths, so deleting a widget never touches a photo.
+  A gallery widget cycles in place; the screensaver takes the whole screen and
+  fades between images until you touch it. Four-finger double tap plays the
+  starred set from anywhere.
+- **People** let one panel serve a household: per-person greeting, theme and
+  pages, with shared pages visible to everyone. Deleting a person is
+  `ON DELETE SET NULL`, never cascade — their pages survive them.
+- **Money** links accounts through Plaid (Hosted Link, so no keyboard and no JS
+  widget on the panel) or by hand, and can drop credit-card and loan due dates
+  onto the calendar as all-day events. Balances are hidden behind dots by
+  default and re-hide themselves 25 seconds after a tap — it is a wall display.
+
+## Configuration
+
+Nothing about a particular home is committed. Credentials (Govee, Plaid,
+calendar feeds) are entered in Settings and live in the database; `galleries/`,
+`config.json` and `*.db` are gitignored. The name in the top bar is
+Settings → Display → *Name shown in the top bar*.
+
 ## Install
 
-Copy the tree to `/home/panel/digicalender`, then:
+Clone to `~/digicalender` on the display host, then:
 
 ```bash
 sudo bash deploy/install.sh
@@ -201,13 +228,15 @@ Each of these cost real debugging time.
 - **Snap Chromium denies hidden directories in `$HOME`**, so a `--user-data-dir`
   under `~/.config` silently fails. Use the snap's own profile path.
 - `pgrep chromium` finds nothing — the snap's binary is `chrome`.
-- **Console noise:** quiet it with `kernel.printk`, never `pci=noaer`. On this
-  host the PCIe AER stream is 100% correctable and comes from the root port
-  holding the only NIC.
+- **Console noise** paints over the X session, because `console=tty0` targets
+  whichever VT is in front. Quiet it with `kernel.printk`, not `pci=noaer` — if
+  the chatter is correctable PCIe AER from the root port holding your only NIC,
+  disabling AER on a headless Wi-Fi-only box is how you strand it.
 
 ## Not done yet
 
 - Recurring events — the `rrule` column exists, nothing reads it.
 - Google / Microsoft `pull()` / `push()`.
 - Govee cloud needs an API key before plugs will respond.
-- Samsung pairing is untested against a real TV (mine was off during testing).
+- Samsung pairing is written against the Tizen protocol but has never been run
+  against a powered-on TV.

@@ -21,4 +21,9 @@ venv/
 .DS_Store
 Thumbs.db
 *.swp
+# Uploaded photos: one folder per gallery set. Yours, not the app's.
 galleries/
+
+# Host-specific notes: addresses, users, device IDs, quirks of one house.
+# Everything in here is deliberately NOT public.
+LOCAL.md

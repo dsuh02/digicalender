@@ -114,10 +114,19 @@ async function reload() {
   if (state.activePerson && !state.people.some(p => p.id === state.activePerson)) {
     state.activePerson = '';
   }
+  applyBrand();
   applySavedTheme();
   computeVisiblePages();
   renderTabs();
   renderAllPages();
+}
+
+/** The name in the top-left is the household's, not the project's. */
+function applyBrand() {
+  const name = (state.settings.brand_name || '').trim() || 'DigiCalender';
+  const node = document.getElementById('brandName');
+  if (node) node.textContent = name;
+  document.title = name;
 }
 
 /** Shared pages, plus the active person's own. */
@@ -1062,7 +1071,7 @@ async function editFinanceAccount(a) {
                  ['investment', 'Investment'], ['retirement', 'Retirement (401k / IRA)'],
                  ['other', 'Other']];
   const { node, values } = await buildForm([
-    { key: 'name', label: 'Name', type: 'text', placeholder: 'Ally HYSA' },
+    { key: 'name', label: 'Name', type: 'text', placeholder: 'Savings' },
     { key: 'institution', label: 'Institution', type: 'text' },
     { key: 'kind', label: 'Type', type: 'select', default: 'savings',
       options: KINDS.map(([v, l]) => ({ value: v, label: l })) },
@@ -1168,7 +1177,7 @@ async function renderPeople() {
     ]));
   });
 
-  const nameInput = el('input.input', { type: 'text', placeholder: 'Name — e.g. Dan, Amaya' });
+  const nameInput = el('input.input', { type: 'text', placeholder: 'Name' });
   wrap.append(
     list,
     el('div.dev-actions', { style: { marginTop: '14px' } }, [
@@ -1738,6 +1747,10 @@ async function editDevice(device, kinds) {
 async function renderDisplay() {
   const s = state.settings;
   const { node, values } = await buildForm([
+    { section: 'This panel' },
+    { key: 'brand_name', label: 'Name shown in the top bar', type: 'text',
+      default: s.brand_name || 'DigiCalender', placeholder: 'DigiCalender',
+      help: 'Call it whatever you like — it is your wall' },
     { section: 'Dim when idle' },
     { key: 'idle_dim', label: 'Dim after inactivity', type: 'toggle',
       default: (s.idle_dim ?? 'true') !== 'false',
@@ -1777,6 +1790,7 @@ async function renderDisplay() {
       onclick: async () => {
         try {
           state.settings = await api.saveSettings({
+            brand_name: (values.brand_name || '').trim(),
             idle_dim: String(!!values.idle_dim),
             idle_stage1_min: String(values.idle_stage1_min ?? 15),
             idle_stage1_level: String(values.idle_stage1_level ?? 8),
@@ -1790,6 +1804,7 @@ async function renderDisplay() {
             night_end: values.night_end || '07:00',
             night_level: String(values.night_level ?? 45),
           });
+          applyBrand();
           applyNightDim();
           tickIdle();
           toast('Saved');

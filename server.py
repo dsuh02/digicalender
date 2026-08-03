@@ -1182,7 +1182,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 # `force` works even with DPMS timers disabled (kiosk.sh turns
                 # them off so nothing sleeps the panel behind our back);
-                # verified on the mini PC + this panel. Any input wakes X too —
+                # tested against a real panel. Any input wakes X too —
                 # this endpoint is the deliberate path.
                 r = subprocess.run(
                     ["xset", "-display", x_display, "dpms", "force",

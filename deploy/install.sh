@@ -3,11 +3,12 @@
 #
 #   sudo bash deploy/install.sh
 #
-# Assumes the app lives at /home/panel/digicalender. Idempotent: safe to re-run
+# Assumes the app lives at ~/digicalender for APP_USER. Idempotent: safe to re-run
 # after pulling changes (it rewrites the units and restarts).
 set -euo pipefail
 
-APP_USER="${APP_USER:-panel}"
+# Defaults to whoever invoked sudo, so nothing is hardcoded to one machine.
+APP_USER="${APP_USER:-${SUDO_USER:-$USER}}"
 APP_DIR="${APP_DIR:-/home/$APP_USER/digicalender}"
 APP_PORT="${APP_PORT:-8080}"
 TIMEZONE="${TIMEZONE:-America/Los_Angeles}"

@@ -156,30 +156,56 @@ def contributions_to_date(accounts: list[dict]) -> dict:
             aid = ext_to_id.get(t.get("account_id"))
             if not aid:
                 continue
-            # Plaid's sign convention on investment transactions is the reverse
-            # of the depository one: money INTO the account is negative.
-            subtype = str(t.get("subtype") or "")
-            amount = float(t.get("amount") or 0)
-            if subtype in ("contribution", "deposit") or (
-                    str(t.get("type") or "") == "cash" and amount < 0):
-                rec = out.setdefault(aid, {"total": 0.0, "count": 0,
-                                           "first": None, "last": None})
-                rec["total"] += abs(amount)
-                rec["count"] += 1
-                d = t.get("date")
-                if d:
-                    rec["first"] = min(rec["first"] or d, d)
-                    rec["last"] = max(rec["last"] or d, d)
+            # ONLY an explicit contribution subtype counts.
+            #
+            # There used to be a fallback here for "type == cash and amount < 0",
+            # meant to catch institutions that leave subtype blank. It caught
+            # Fidelity's DIVIDEND REINVESTMENTS instead — which are exactly that
+            # shape — and turned 3 real contributions into 16, inflating the
+            # count fivefold. A loose rule that silently mislabels data is worse
+            # than missing an institution that does not report cleanly.
+            #
+            # Verified against both live providers: Guideline sends
+            # (buy, contribution) "Payroll contribution"; Fidelity sends
+            # (cash, contribution) "CASH CONTRIBUTION CURRENT YEAR".
+            if str(t.get("subtype") or "") not in ("contribution", "deposit"):
+                continue
+            amount = abs(float(t.get("amount") or 0))
+            if amount <= 0:
+                continue
+            rec = out.setdefault(aid, {"total": 0.0, "count": 0, "first": None,
+                                       "last": None, "recent": []})
+            rec["total"] += amount
+            rec["count"] += 1
+            d = t.get("date")
+            if d:
+                rec["first"] = min(rec["first"] or d, d)
+                rec["last"] = max(rec["last"] or d, d)
+                rec["recent"].append({"date": d, "amount": round(amount, 2)})
+
+    cutoff = (date.today() - timedelta(days=365)).isoformat()
     for rec in out.values():
         rec["total"] = round(rec["total"], 2)
-        # A monthly average is only meaningful over a span worth averaging.
-        if rec["first"] and rec["last"] and rec["count"] >= 2:
-            fy, fm = int(rec["first"][:4]), int(rec["first"][5:7])
-            ly, lm = int(rec["last"][:4]), int(rec["last"][5:7])
-            span = max(1, _months_between((fy, fm), (ly, lm)) + 1)
-            rec["monthly_avg"] = round(rec["total"] / span, 2)
+        rec["recent"].sort(key=lambda r: r["date"], reverse=True)
+
+        # The trailing year, NOT the lifetime average, is what someone should
+        # type into a contributions field. A lifetime figure smears a raise or a
+        # newly-opened account across months that never had one — the Roth here
+        # reads $27/mo lifetime off three lumpy deposits, which is not a rate
+        # anybody chose.
+        recent12 = [r for r in rec["recent"] if r["date"] >= cutoff]
+        rec["last12_total"] = round(sum(r["amount"] for r in recent12), 2)
+        rec["last12_count"] = len(recent12)
+        if recent12:
+            months = max(1, _months_between(
+                (int(recent12[-1]["date"][:4]), int(recent12[-1]["date"][5:7])),
+                (int(recent12[0]["date"][:4]), int(recent12[0]["date"][5:7]))) + 1)
+            rec["monthly_avg"] = round(rec["last12_total"] / months, 2)
+            rec["months_observed"] = months
         else:
             rec["monthly_avg"] = None
+            rec["months_observed"] = 0
+        rec["recent"] = rec["recent"][:6]
     return out
 
 

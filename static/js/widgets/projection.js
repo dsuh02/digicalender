@@ -296,10 +296,16 @@ export async function openProjectionSetup(onSaved) {
 
     // What Plaid actually saw going in. Absent for most 401k providers, so it
     // is offered as a hint, never presented as the truth.
+    // What actually went in, per the institution. The TRAILING YEAR is the
+    // number worth typing in — a lifetime average smears a raise or a
+    // newly-opened account across months that never had one.
     const seen = s.contributed_to_date;
     const hint = seen && seen.monthly_avg
-      ? `Plaid shows ${money(seen.total)} paid in across ${seen.count} transactions — about ${money(seen.monthly_avg)}/mo`
-      : 'No contribution history available from this institution — enter what you put in each month.';
+      ? `Last 12 months: ${money(seen.last12_total)} in ${seen.last12_count} contributions `
+        + `over ${seen.months_observed} month${seen.months_observed === 1 ? '' : 's'} `
+        + `— about ${money(seen.monthly_avg)}/mo. Includes any employer match; `
+        + `providers report one combined figure.`
+      : 'No contribution history reported by this institution — enter what you put in each month.';
 
     const row = el('div.proj-cfg', {}, [
       el('div.proj-cfg-head', {}, [
@@ -321,6 +327,13 @@ export async function openProjectionSetup(onSaved) {
           monthly.dispatchEvent(new Event('input'));
         },
       }));
+      // The individual deposits, because an average hides the pattern: three
+      // lumpy transfers and a steady payroll deferral produce the same mean and
+      // mean very different things about next year.
+      if (seen.recent && seen.recent.length) {
+        row.append(el('div.proj-recent', {}, seen.recent.map(r =>
+          el('span.proj-recent-item', { text: `${r.date.slice(5)} ${money(r.amount)}` }))));
+      }
     }
     body.append(row);
   }

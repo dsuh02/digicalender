@@ -793,6 +793,9 @@ body.editing .fin-layers { display: none; }
                 font-variant-numeric: tabular-nums; }
 .proj-cfg-fields { display: flex; gap: 12px; }
 .proj-cfg-fields .field { flex: 1; }
+.proj-recent { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 6px; }
+.proj-recent-item { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums;
+                    background: var(--surface-2); border-radius: var(--r-chip); padding: 2px 6px; }
 
 .link-url {
   display: block; margin: 8px 0; padding: 10px 12px;

@@ -22,6 +22,7 @@ import {
   DEFAULT_THEME, PRESETS, apply as applyTheme, eventPalette, getTheme,
   normalize as normalizeTheme, resolve as resolveTheme,
 } from './core/theme.js';
+import { contentScale } from './core/scale.js';
 import { clamp, clear, debounce, el } from './core/util.js';
 import { initials } from './widgets/people.js';
 import { CATEGORIES, WIDGETS, widgetDef } from './widgets/index.js';
@@ -39,6 +40,7 @@ const state = {
   editing: false,
   grids: new Map(),          // page id -> Grid
   instances: new Map(),      // widget id -> {destroy, refresh}
+  scalers: new Map(),        // widget id -> content scaler
 };
 
 const dom = {};
@@ -223,6 +225,8 @@ function renderAllPages() {
             await api.deleteWidget(w.id);
             state.instances.get(w.id)?.destroy?.();
             state.instances.delete(w.id);
+            state.scalers.get(w.id)?.destroy?.();
+            state.scalers.delete(w.id);
             grid.remove(w.id);
             page.widgets = page.widgets.filter(x => x.id !== w.id);
           } catch (e) { toast(e.message, true); }
@@ -241,6 +245,16 @@ function mountWidget(grid, w) {
   const def = widgetDef(w.type);
   const content = el('div.w-content');
   grid.add(w, content);
+
+  // Sizing is the box's business, not the widget's, so it is wired here once
+  // rather than in every render(). Content is scaled, never dropped.
+  const node = grid.items.get(w.id)?.node;
+  if (node && node.__scaleBox && node.__bodyBox) {
+    const scaler = contentScale(node.__bodyBox, node.__scaleBox, def, () => grid.cellSize());
+    scaler.update(w.settings || {});
+    state.scalers.set(w.id, scaler);
+  }
+
   if (!def) {
     content.append(el('p.empty-hint', { text: `Unknown widget: ${w.type}` }));
     return;
@@ -258,6 +272,8 @@ function remountWidget(w) {
   if (!grid) return;
   state.instances.get(w.id)?.destroy?.();
   state.instances.delete(w.id);
+  state.scalers.get(w.id)?.destroy?.();
+  state.scalers.delete(w.id);
   grid.remove(w.id);
   mountWidget(grid, w);
 }

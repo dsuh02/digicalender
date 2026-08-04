@@ -262,24 +262,50 @@ async function buildControl(f, values, onChange) {
 export async function buildForm(schema, initial = {}) {
   const values = { ...initial };
   const node = el('div.form');
-  const onChange = (k, v) => { values[k] = v; };
+  const deps = [];                       // {key, node, invert}
+  const applyDeps = () => {
+    for (const d of deps) {
+      const on = d.invert ? !values[d.key] : !!values[d.key];
+      d.node.classList.toggle('field-disabled', !on);
+      d.node.querySelectorAll('input, select, textarea, button')
+        .forEach(c => { c.disabled = !on; });
+    }
+  };
+  const onChange = (k, v) => { values[k] = v; applyDeps(); };
   for (const f of schema) {
     if (f.section) {
       node.append(el('h3.form-section', { text: f.section }));
       continue;
     }
-    node.append(await buildControl(f, values, onChange));
+    const built = await buildControl(f, values, onChange);
+    if (f.disabledWhen) deps.push({ key: f.disabledWhen, node: built, invert: true });
+    if (f.enabledWhen) deps.push({ key: f.enabledWhen, node: built, invert: false });
+    node.append(built);
   }
+  applyDeps();
   return { node, values };
 }
 
+/**
+ * Options every widget gets, appended to its own.
+ *
+ * Sizing is a property of the box, not of any one widget type, and the rule is
+ * the user's to set: either the app picks a content size from the box, or they
+ * pin it themselves. Nothing is ever hidden for being small — content shrinks.
+ */
+export const COMMON_SETTINGS = [
+  { section: 'Size' },
+  { key: 'autoScale', label: 'Let the app size the contents', type: 'toggle', default: true,
+    help: 'Scales type, rows and graphics to the box. Turn off to set it yourself.' },
+  { key: 'contentScale', label: 'Content size (%)', type: 'slider',
+    min: 25, max: 250, step: 5, default: 100, disabledWhen: 'autoScale',
+    help: 'Best effort to fit everything in the box at this size.' },
+];
+
 /** The widget options panel. */
 export async function openWidgetSettings(def, widget, onSave) {
-  const schema = def.settings || [];
+  const schema = [...(def.settings || []), ...COMMON_SETTINGS];
   const { node, values } = await buildForm(schema, widget.settings || {});
-  if (!schema.length) {
-    node.append(el('p.sheet-note', { text: 'This widget has no options.' }));
-  }
   openSheet({
     title: `${def.name} options`,
     body: node,

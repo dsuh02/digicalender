@@ -43,8 +43,15 @@ export class Grid {
 
   add(widget, contentNode) {
     const node = el('section.w', { dataset: { id: widget.id, type: widget.type } });
+    // .w-scale carries the zoom; .w-body stays UNZOOMED so it can be measured
+    // in real pixels. Measuring inside the zoom would feed the scaler its own
+    // output and it would never settle.
+    const scaleBox = el('div.w-scale', {}, [contentNode]);
+    const bodyBox = el('div.w-body', {}, [scaleBox]);
+    node.__scaleBox = scaleBox;
+    node.__bodyBox = bodyBox;
     node.append(
-      el('div.w-body', {}, [contentNode]),
+      bodyBox,
       // The grip is a sibling of the chrome, not a child: nested inside it, an
       // absolutely-positioned grip covers the gear and delete buttons and eats
       // their taps.

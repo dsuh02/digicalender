@@ -7,9 +7,12 @@
  *
  * **Every widget here is sized by measurement, not assumption.** A box on this
  * grid can be 240×200 or 1900×1080 at any aspect ratio, so the plot area is
- * measured with autoSize() and the chart is drawn to those exact pixels. What
- * the box cannot carry, it drops: axes, then labels, then the chart itself in
- * favour of the number it was illustrating. A cramped chart is worse than none.
+ * measured with autoSize() and the chart is drawn to those exact pixels.
+ *
+ * Nothing is ever dropped for being small. An earlier version shed axes, then
+ * labels, then the chart itself below fixed thresholds; that overrode the size
+ * the user had chosen and made boxes look broken rather than dense. Content
+ * shrinks instead, and core/scale.js gives the user the final say over how far.
  *
  * Same privacy contract as finance.js: every amount can be dotted out, a tap
  * reveals it, and it re-hides itself. Charts stay visible while hidden — the
@@ -167,14 +170,15 @@ export const SpendingWidget = {
 
       stopSize = autoSize(plot, (w, h) => {
         const F = fit(w, h);
-        // Legend beside the ring in a wide box, under it in a tall one, and not
-        // at all when either would leave the ring too small to read.
-        const side = w > h * 1.35 && w >= 260;
-        const stacked = !side && h > w * 1.15 && h >= 240;
+        // Legend beside the ring in a wide box, under it otherwise. It is
+        // always shown — dropping it in a squarish box was the app overruling
+        // the size the user picked.
+        const side = w > h * 1.25;
+        const stacked = !side;
         const wrap = el(`div.donut-layout${side ? '.side' : ''}${stacked ? '.stacked' : ''}`);
 
-        const ringW = side ? Math.max(80, Math.min(h, w * 0.5)) : w;
-        const ringH = stacked ? Math.max(80, h * 0.62) : h;
+        const ringW = side ? Math.max(24, Math.min(h, w * 0.5)) : w;
+        const ringH = stacked ? Math.max(24, h * 0.6) : h;
         const ring = donut({
           slices: cats.map((c, i) => ({ label: c.label, value: c.total, color: seriesColor(i) })),
           width: ringW, height: ringH,
@@ -185,10 +189,9 @@ export const SpendingWidget = {
         ringBox.style.height = `${ringH}px`;
         wrap.append(ringBox);
 
-        if (side || stacked) {
+        {
           clear(legend);
-          const room = side ? Math.floor(h / (F.font * 2)) : Math.floor((h - ringH) / (F.font * 2));
-          cats.slice(0, Math.max(2, room)).forEach((c, i) => {
+          cats.forEach((c, i) => {
             legend.append(el('div.legend-item', {}, [
               el('span.legend-dot', { style: { background: seriesColor(i) } }),
               el('span.legend-k', { text: c.label }),
@@ -331,17 +334,8 @@ export const CreditWidget = {
 
       const plot = plotBody(body);
       stopSize = autoSize(plot, (w, h) => {
-        const size = Math.min(w, h);
-        // Below this the arc is a smudge, so drop it and let the number carry
-        // the widget — it was always the point.
-        if (size < 96) {
-          const only = el('div.gauge-bare');
-          only.append(
-            el('div.gauge-v', { text: `${u.pct}%`, style: { color } }),
-            el('div.gauge-k', { text: 'of limit' }),
-          );
-          return only;
-        }
+        // The arc is always drawn. It used to be dropped below 96px, which is
+        // exactly the kind of decision that belongs to whoever sized the box.
         const gauge = arcGauge({ value: u.pct, max: 100, width: w, height: h, color });
         const centre = el('div.gauge-centre', {}, [
           el('div.gauge-v', { text: `${u.pct}%`, style: { color } }),

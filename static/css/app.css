@@ -602,37 +602,31 @@ body.editing .fin-layers { display: none; }
 }
 .bill-when.soon { color: var(--danger); font-weight: 600; }
 
-/* Sized against the WIDGET, not the viewport: vh made this widget's type
-   identical whether it was a sliver or half the wall. container-type: size
-   lets cqh mean "percent of this box". */
+/* Sized in plain pixels and scaled by the widget's zoom. */
 .networth { flex: 1; min-height: 0; display: flex; flex-direction: column;
-            overflow: hidden; container-type: size; }
-.nw-label { font-size: clamp(9px, 4.5cqh, 12px); font-weight: 600; letter-spacing: .09em;
+            overflow: hidden; container-type: inline-size; }
+.nw-label { font-size: 10px; font-weight: 600; letter-spacing: .09em;
             text-transform: uppercase; color: var(--text-3);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nw-value {
-  font-size: clamp(18px, 15cqh, 46px); font-weight: 300; letter-spacing: -.02em;
+  font-size: 32px; font-weight: 300; letter-spacing: -.02em;
   line-height: 1.1; margin-top: 3px; font-variant-numeric: tabular-nums;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.nw-change { font-size: clamp(10px, 4.6cqh, 14px); color: var(--good); margin-top: 2px;
+.nw-change { font-size: 12px; color: var(--good); margin-top: 2px;
              font-variant-numeric: tabular-nums;
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nw-change.down { color: var(--warn); }
 .spark-host { flex: 1 1 auto; min-height: 12px; margin: 8px 0 4px; overflow: hidden; }
-.nw-split { display: flex; gap: clamp(10px, 6cqw, 26px); margin-top: auto;
+.nw-split { display: flex; gap: 18px; margin-top: auto;
             padding-top: 6px; flex: none; }
-.nw-split-k { font-size: clamp(9px, 4cqh, 12px); color: var(--text-3); }
-.nw-split-v { font-size: clamp(12px, 6cqh, 18px); font-variant-numeric: tabular-nums;
+.nw-split-k { font-size: 10px; color: var(--text-3); }
+.nw-split-v { font-size: 15px; font-variant-numeric: tabular-nums;
               white-space: nowrap; }
 .nw-split-v.debt { color: var(--warn); }
 /* Short box: the trend and the split go before the number shrinks. */
-@container (max-height: 130px) {
-  .spark-host, .nw-split { display: none; }
-}
-@container (max-height: 88px) {
-  .nw-label, .nw-change { display: none; }
-}
+
+
 
 /* ------------------------------------------------------------- charts ---
  * Charts render at MEASURED pixel size (see core/charts.js), so nothing here
@@ -644,6 +638,11 @@ body.editing .fin-layers { display: none; }
  * depends on the widget's size, not the screen's — the same box on the same
  * screen can be a sliver or half the wall.
  */
+/* .w-body is the measured, UNZOOMED box; .w-scale carries the zoom. Measuring
+   inside the zoom would feed the scaler its own output and never settle. */
+.w-scale { width: 100%; height: 100%; display: flex; min-width: 0; min-height: 0; }
+.w-scale > .w-content { flex: 1; min-width: 0; min-height: 0; display: flex; }
+
 .chart { display: block; }
 .chart-line { stroke-width: 2; vector-effect: non-scaling-stroke;
               stroke-linejoin: round; stroke-linecap: round; }
@@ -661,54 +660,48 @@ body.editing .fin-layers { display: none; }
               align-items: center; justify-content: center; touch-action: none;
               overflow: hidden; }
 
-/* container-type: size lets descendants ask how big THIS widget is. Requires a
-   definite size, which every grid cell has. */
+/* Sizes here are plain pixels. The widget's zoom (core/scale.js) is the single
+   thing that scales them — container-query units would resolve INSIDE that zoom
+   and cancel it out, leaving the size slider doing nothing. inline-size is kept
+   only for layout reflow, never for hiding. */
 .insight { flex: 1; min-height: 0; display: flex; flex-direction: column;
-           overflow: hidden; gap: 2px; container-type: size; }
+           overflow: hidden; gap: 2px; container-type: inline-size; }
 .insight-centre { align-items: stretch; }
 .insight-head { flex: 0 0 auto; }
-.insight-label { font-size: clamp(9px, 4.5cqh, 12px); font-weight: 600;
+.insight-label { font-size: 10px; font-weight: 600;
                  letter-spacing: .09em; text-transform: uppercase; color: var(--text-3);
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.insight-value { font-size: clamp(17px, 13cqh, 46px); font-weight: 300;
+.insight-value { font-size: 32px; font-weight: 300;
                  letter-spacing: -.02em; line-height: 1.12; margin-top: 2px;
                  font-variant-numeric: tabular-nums;
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .insight-value.debt { color: var(--warn); }
-.insight-sub { font-size: clamp(10px, 4.6cqh, 14px); color: var(--text-3);
+.insight-sub { font-size: 12px; color: var(--text-3);
                margin-top: 2px; font-variant-numeric: tabular-nums;
                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
-.insight-delta { font-size: clamp(10px, 4.6cqh, 14px); margin-top: 2px;
+.insight-delta { font-size: 12px; margin-top: 2px;
                  font-variant-numeric: tabular-nums; color: var(--text-2);
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .insight-delta.down { color: var(--good); }
 .insight-delta.up { color: var(--warn); }
 
-/* Short boxes: the label and the sub-line are the first things to go, so the
-   number itself keeps its size instead of everything shrinking together. */
-@container (max-height: 120px) {
-  .insight-label, .insight-delta, .insight-sub { display: none; }
-  .insight-value { font-size: clamp(15px, 30cqh, 34px); }
-}
-@container (max-height: 74px) {
-  .chart-host { display: none; }
-}
 
 .insight-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; touch-action: pan-y;
                 margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
 .bar-row { display: grid; grid-template-columns: minmax(48px, 1fr) 2fr auto;
            align-items: center; gap: 8px; }
-.bar-row-k { font-size: clamp(10px, 4.4cqh, 14px); color: var(--text-2);
+.bar-row-k { font-size: 12px; color: var(--text-2);
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bar-row-track { height: clamp(5px, 2.4cqh, 9px); background: var(--surface-2);
+.bar-row-track { height: 7px; background: var(--surface-2);
                  border-radius: 4px; overflow: hidden; }
 .bar-row-fill { height: 100%; border-radius: 4px; }
-.bar-row-v { font-size: clamp(10px, 4.4cqh, 14px); font-variant-numeric: tabular-nums;
+.bar-row-v { font-size: 12px; font-variant-numeric: tabular-nums;
              color: var(--text); }
-/* Narrow boxes cannot carry three columns; the bar is the first to go. */
+/* A narrow row drops the BAR — pure decoration — and keeps the label and the
+   amount, which are the information. */
 @container (max-width: 210px) {
   .bar-row { grid-template-columns: 1fr auto; }
-  .bar-row-track { display: none; }
+  .bar-row-track { visibility: hidden; width: 0; }
 }
 
 .donut-layout { display: flex; align-items: center; justify-content: center;
@@ -725,22 +718,22 @@ body.editing .fin-layers { display: none; }
 }
 .gauge-bare { display: flex; flex-direction: column; align-items: center;
               justify-content: center; width: 100%; height: 100%; }
-.donut-centre-k, .gauge-k { font-size: clamp(8px, 3.6cqh, 12px); text-transform: uppercase;
+.donut-centre-k, .gauge-k { font-size: 10px; text-transform: uppercase;
                             letter-spacing: .08em; color: var(--text-3);
                             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
                             max-width: 100%; }
-.donut-centre-v { font-size: clamp(12px, 6.5cqh, 24px); font-variant-numeric: tabular-nums;
+.donut-centre-v { font-size: 18px; font-variant-numeric: tabular-nums;
                   margin-top: 2px; white-space: nowrap; }
-.donut-centre-s { font-size: clamp(8px, 3.4cqh, 12px); color: var(--text-3);
+.donut-centre-s { font-size: 10px; color: var(--text-3);
                   margin-top: 1px; white-space: nowrap; }
-.gauge-v { font-size: clamp(18px, 11cqh, 44px); font-weight: 300;
+.gauge-v { font-size: 31px; font-weight: 300;
            font-variant-numeric: tabular-nums; line-height: 1.05; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 3px 12px; flex: 0 1 auto;
           min-width: 0; overflow: hidden; align-content: center; }
 .donut-layout.side .legend { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; }
 .legend-item { display: flex; align-items: center; gap: 5px;
-               font-size: clamp(9px, 3.8cqh, 13px); min-width: 0; }
+               font-size: 11px; min-width: 0; }
 .legend-dot { width: .7em; height: .7em; border-radius: 2px; flex: none; }
 .legend-k { color: var(--text-2); white-space: nowrap; overflow: hidden;
             text-overflow: ellipsis; }
@@ -749,7 +742,7 @@ body.editing .fin-layers { display: none; }
 /* ----------------------------------------------------- savings projection */
 
 .proj { flex: 1; min-height: 0; display: flex; flex-direction: column;
-        overflow: hidden; gap: 4px; container-type: size; }
+        overflow: hidden; gap: 4px; container-type: inline-size; }
 .proj-head { display: flex; align-items: flex-start; gap: 10px; flex: none; }
 .proj-head-main { min-width: 0; flex: 1; }
 .proj-actions { display: flex; gap: 4px; flex: none; flex-wrap: wrap;
@@ -773,18 +766,25 @@ body.editing .fin-layers { display: none; }
 .proj-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; flex: none;
                align-content: flex-start; overflow: hidden; }
 .proj-legend-item { display: flex; align-items: center; gap: 6px;
-                    font-size: clamp(10px, 4cqh, 14px); min-width: 0; }
+                    font-size: 12px; min-width: 0; }
 .proj-legend-k { color: var(--text-2); white-space: nowrap; overflow: hidden;
                  text-overflow: ellipsis; }
 .proj-legend-v { color: var(--text); font-variant-numeric: tabular-nums;
                  margin-left: auto; white-space: nowrap; }
-.proj-note { font-size: clamp(9px, 3.4cqh, 12px); color: var(--text-3); flex: none;
+.proj-note { font-size: 10px; color: var(--text-3); flex: none;
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Small boxes shed the chrome before the chart. */
-@container (max-height: 200px) { .proj-note { display: none; } }
-@container (max-height: 150px) { .proj-legend { display: none; } }
+
+
+/* Reflow, never removal. A narrow box stacks the buttons rather than dropping
+   them; a narrow row hides the BAR (pure decoration) but keeps label and value.
+   Nothing here removes information. */
 @container (max-width: 300px) { .proj-actions { flex-direction: column; } }
+@container (max-width: 150px) {
+  .bar-row { grid-template-columns: 1fr auto; }
+  .bar-row-track { visibility: hidden; width: 0; }
+}
 
 .proj-cfg { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .proj-cfg-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
@@ -796,6 +796,8 @@ body.editing .fin-layers { display: none; }
 .proj-recent { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 6px; }
 .proj-recent-item { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums;
                     background: var(--surface-2); border-radius: var(--r-chip); padding: 2px 6px; }
+
+.field-disabled { opacity: .42; pointer-events: none; }
 
 .link-url {
   display: block; margin: 8px 0; padding: 10px 12px;

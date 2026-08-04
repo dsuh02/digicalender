@@ -168,8 +168,8 @@ export const SpendingWidget = {
         );
       };
 
-      stopSize = autoSize(plot, (w, h) => {
-        const F = fit(w, h);
+      stopSize = autoSize(plot, (w, h, k) => {
+        const F = fit(w, h, k);
         // Legend beside the ring in a wide box, under it otherwise. It is
         // always shown — dropping it in a squarish box was the app overruling
         // the size the user picked.
@@ -256,10 +256,10 @@ export const CashflowWidget = {
       ]));
 
       const plot = plotBody(body);
-      stopSize = autoSize(plot, (w, h) => {
+      stopSize = autoSize(plot, (w, h, k) => {
         // Narrow box: show only the most recent months rather than shaving the
         // bars down to threads nobody can compare.
-        const perMonth = 26;
+        const perMonth = 26 * k;
         const room = Math.max(2, Math.floor(w / perMonth));
         const shown = flow.slice(Math.max(0, flow.length - room));
         const offset = flow.length - shown.length;
@@ -269,7 +269,7 @@ export const CashflowWidget = {
             values: [f.in, f.out],
             colors: ['var(--good)', 'var(--c-4)'],
           })),
-          width: w, height: h,
+          width: w, height: h, scale: k,
           format: hide ? () => '' : compactMoney,
           onHover: (i) => { picked = offset + i; draw(); },
         });
@@ -333,7 +333,7 @@ export const CreditWidget = {
                   : 'var(--good)';
 
       const plot = plotBody(body);
-      stopSize = autoSize(plot, (w, h) => {
+      stopSize = autoSize(plot, (w, h, k) => {
         // The arc is always drawn. It used to be dropped below 96px, which is
         // exactly the kind of decision that belongs to whoever sized the box.
         const gauge = arcGauge({ value: u.pct, max: 100, width: w, height: h, color });
@@ -427,14 +427,14 @@ export const NetWorthChartWidget = {
       readout(null);
 
       const plot = plotBody(body);
-      stopSize = autoSize(plot, (w, h) => areaChart({
+      stopSize = autoSize(plot, (w, h, k) => areaChart({
         series: [{
           key: 'net', label: 'Net worth',
           values: series.map(p => Number(p.net) || 0),
           color: 'var(--primary)',
         }],
         labels: series.map(p => String(p.d).slice(5)),
-        width: w, height: h,
+        width: w, height: h, scale: k,
         baseline: 0,
         format: hide ? () => '' : compactMoney,
         onHover: readout,

@@ -192,7 +192,7 @@ export const ProjectionWidget = {
         onReadout: readout,
       });
       plot.append(chart.node);
-      stopSize = observeSize(plot, (w, h) => chart.setSize(w, h));
+      stopSize = observeSize(plot, (w, h, k) => chart.setSize(w, h, k));
 
       readout(null);
 

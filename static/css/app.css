@@ -17,6 +17,7 @@
  */
 
 :root {
+  --ui-scale: 1;
   --bg:          #0b0d10;
   --surface:     #131619;
   --surface-2:   #191d22;
@@ -536,9 +537,9 @@ button.src-dot-btn:active { background-color: var(--surface-3); background-clip:
   border-top: 1px solid var(--line);
 }
 .src-group:first-child { margin-top: 0; padding-top: 0; border-top: none; }
-.src-group-k { font-size: 11px; font-weight: 600; letter-spacing: .09em;
+.src-group-k { font-size: calc(11px * var(--ui-scale)); font-weight: 600; letter-spacing: .09em;
                text-transform: uppercase; color: var(--text-2); }
-.src-group-n { font-size: 11px; color: var(--text-3); margin-left: auto;
+.src-group-n { font-size: calc(11px * var(--ui-scale)); color: var(--text-3); margin-left: auto;
                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Layers button on the Accounts widget: visibility without unlocking the
@@ -605,23 +606,23 @@ body.editing .fin-layers { display: none; }
 /* Sized in plain pixels and scaled by the widget's zoom. */
 .networth { flex: 1; min-height: 0; display: flex; flex-direction: column;
             overflow: hidden; container-type: inline-size; }
-.nw-label { font-size: 10px; font-weight: 600; letter-spacing: .09em;
+.nw-label { font-size: calc(10px * var(--ui-scale)); font-weight: 600; letter-spacing: .09em;
             text-transform: uppercase; color: var(--text-3);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nw-value {
-  font-size: 32px; font-weight: 300; letter-spacing: -.02em;
-  line-height: 1.1; margin-top: 3px; font-variant-numeric: tabular-nums;
+  font-size: calc(32px * var(--ui-scale)); font-weight: 300; letter-spacing: -.02em;
+  line-height: 1.1; margin-top: calc(3px * var(--ui-scale)); font-variant-numeric: tabular-nums;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.nw-change { font-size: 12px; color: var(--good); margin-top: 2px;
+.nw-change { font-size: calc(12px * var(--ui-scale)); color: var(--good); margin-top: calc(2px * var(--ui-scale));
              font-variant-numeric: tabular-nums;
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nw-change.down { color: var(--warn); }
-.spark-host { flex: 1 1 auto; min-height: 12px; margin: 8px 0 4px; overflow: hidden; }
-.nw-split { display: flex; gap: 18px; margin-top: auto;
-            padding-top: 6px; flex: none; }
-.nw-split-k { font-size: 10px; color: var(--text-3); }
-.nw-split-v { font-size: 15px; font-variant-numeric: tabular-nums;
+.spark-host { flex: 1 1 auto; min-height: calc(12px * var(--ui-scale)); margin: 8px 0 4px; overflow: hidden; }
+.nw-split { display: flex; gap: calc(18px * var(--ui-scale)); margin-top: auto;
+            padding-top: calc(6px * var(--ui-scale)); flex: none; }
+.nw-split-k { font-size: calc(10px * var(--ui-scale)); color: var(--text-3); }
+.nw-split-v { font-size: calc(15px * var(--ui-scale)); font-variant-numeric: tabular-nums;
               white-space: nowrap; }
 .nw-split-v.debt { color: var(--warn); }
 /* Short box: the trend and the split go before the number shrinks. */
@@ -631,16 +632,18 @@ body.editing .fin-layers { display: none; }
 /* ------------------------------------------------------------- charts ---
  * Charts render at MEASURED pixel size (see core/charts.js), so nothing here
  * scales the drawing — 1 SVG unit is 1 CSS pixel and tick text is already the
- * size it claims to be. Font sizes on .chart-tick come from the JS, which knows
- * the box; the rule below is only a fallback.
+ * size it claims to be. Font sizes come from the JS as SVG attributes and must
+ * NOT be declared in CSS — a CSS rule outranks a presentation attribute.
  *
  * Widget typography uses container query units, NOT vh. A widget's legibility
  * depends on the widget's size, not the screen's — the same box on the same
  * screen can be a sliver or half the wall.
  */
-/* .w-body is the measured, UNZOOMED box; .w-scale carries the zoom. Measuring
-   inside the zoom would feed the scaler its own output and never settle. */
-.w-scale { width: 100%; height: 100%; display: flex; min-width: 0; min-height: 0; }
+/* .w-body is the measured box; .w-scale carries --ui-scale, which every size
+   inside a widget is multiplied by. The body itself is never scaled — measuring
+   something the scale affects would feed the scaler its own output. */
+.w-scale { --ui-scale: 1; width: 100%; height: 100%; display: flex;
+            min-width: 0; min-height: 0; }
 .w-scale > .w-content { flex: 1; min-width: 0; min-height: 0; display: flex; }
 
 .chart { display: block; }
@@ -648,7 +651,11 @@ body.editing .fin-layers { display: none; }
               stroke-linejoin: round; stroke-linecap: round; }
 .chart-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .chart-zero { stroke: var(--line-strong); }
-.chart-tick { fill: var(--text-3); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* NO font-size here. A CSS rule beats an SVG presentation attribute, so
+   declaring it would silently override the per-chart size fit() computes from
+   the measured box — which is exactly what it was doing. The charts set
+   font-size as an attribute; leave it to them. */
+.chart-tick { fill: var(--text-3); font-variant-numeric: tabular-nums; }
 .chart-cursor { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 3 3;
                 vector-effect: non-scaling-stroke; pointer-events: none; }
 .chart-dot { fill: var(--bg); stroke-width: 2; vector-effect: non-scaling-stroke;
@@ -665,21 +672,21 @@ body.editing .fin-layers { display: none; }
    and cancel it out, leaving the size slider doing nothing. inline-size is kept
    only for layout reflow, never for hiding. */
 .insight { flex: 1; min-height: 0; display: flex; flex-direction: column;
-           overflow: hidden; gap: 2px; container-type: inline-size; }
+           overflow: hidden; gap: calc(2px * var(--ui-scale)); container-type: inline-size; }
 .insight-centre { align-items: stretch; }
 .insight-head { flex: 0 0 auto; }
-.insight-label { font-size: 10px; font-weight: 600;
+.insight-label { font-size: calc(10px * var(--ui-scale)); font-weight: 600;
                  letter-spacing: .09em; text-transform: uppercase; color: var(--text-3);
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.insight-value { font-size: 32px; font-weight: 300;
-                 letter-spacing: -.02em; line-height: 1.12; margin-top: 2px;
+.insight-value { font-size: calc(32px * var(--ui-scale)); font-weight: 300;
+                 letter-spacing: -.02em; line-height: 1.12; margin-top: calc(2px * var(--ui-scale));
                  font-variant-numeric: tabular-nums;
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .insight-value.debt { color: var(--warn); }
-.insight-sub { font-size: 12px; color: var(--text-3);
-               margin-top: 2px; font-variant-numeric: tabular-nums;
+.insight-sub { font-size: calc(12px * var(--ui-scale)); color: var(--text-3);
+               margin-top: calc(2px * var(--ui-scale)); font-variant-numeric: tabular-nums;
                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
-.insight-delta { font-size: 12px; margin-top: 2px;
+.insight-delta { font-size: calc(12px * var(--ui-scale)); margin-top: calc(2px * var(--ui-scale));
                  font-variant-numeric: tabular-nums; color: var(--text-2);
                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .insight-delta.down { color: var(--good); }
@@ -687,15 +694,15 @@ body.editing .fin-layers { display: none; }
 
 
 .insight-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; touch-action: pan-y;
-                margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+                margin-top: calc(6px * var(--ui-scale)); display: flex; flex-direction: column; gap: calc(6px * var(--ui-scale)); }
 .bar-row { display: grid; grid-template-columns: minmax(48px, 1fr) 2fr auto;
-           align-items: center; gap: 8px; }
-.bar-row-k { font-size: 12px; color: var(--text-2);
+           align-items: center; gap: calc(8px * var(--ui-scale)); }
+.bar-row-k { font-size: calc(12px * var(--ui-scale)); color: var(--text-2);
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bar-row-track { height: 7px; background: var(--surface-2);
-                 border-radius: 4px; overflow: hidden; }
-.bar-row-fill { height: 100%; border-radius: 4px; }
-.bar-row-v { font-size: 12px; font-variant-numeric: tabular-nums;
+.bar-row-track { height: calc(7px * var(--ui-scale)); background: var(--surface-2);
+                 border-radius: calc(4px * var(--ui-scale)); overflow: hidden; }
+.bar-row-fill { height: 100%; border-radius: calc(4px * var(--ui-scale)); }
+.bar-row-v { font-size: calc(12px * var(--ui-scale)); font-variant-numeric: tabular-nums;
              color: var(--text); }
 /* A narrow row drops the BAR — pure decoration — and keeps the label and the
    amount, which are the information. */
@@ -705,9 +712,9 @@ body.editing .fin-layers { display: none; }
 }
 
 .donut-layout { display: flex; align-items: center; justify-content: center;
-                gap: 10px; width: 100%; height: 100%; }
+                gap: calc(10px * var(--ui-scale)); width: 100%; height: 100%; }
 .donut-layout.side { flex-direction: row; }
-.donut-layout.stacked { flex-direction: column; gap: 6px; }
+.donut-layout.stacked { flex-direction: column; gap: calc(6px * var(--ui-scale)); }
 .donut-wrap, .gauge-wrap { position: relative; flex: none;
                            display: flex; align-items: center; justify-content: center; }
 .gauge-wrap { width: 100%; height: 100%; }
@@ -718,23 +725,23 @@ body.editing .fin-layers { display: none; }
 }
 .gauge-bare { display: flex; flex-direction: column; align-items: center;
               justify-content: center; width: 100%; height: 100%; }
-.donut-centre-k, .gauge-k { font-size: 10px; text-transform: uppercase;
+.donut-centre-k, .gauge-k { font-size: calc(10px * var(--ui-scale)); text-transform: uppercase;
                             letter-spacing: .08em; color: var(--text-3);
                             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
                             max-width: 100%; }
-.donut-centre-v { font-size: 18px; font-variant-numeric: tabular-nums;
-                  margin-top: 2px; white-space: nowrap; }
-.donut-centre-s { font-size: 10px; color: var(--text-3);
-                  margin-top: 1px; white-space: nowrap; }
-.gauge-v { font-size: 31px; font-weight: 300;
+.donut-centre-v { font-size: calc(18px * var(--ui-scale)); font-variant-numeric: tabular-nums;
+                  margin-top: calc(2px * var(--ui-scale)); white-space: nowrap; }
+.donut-centre-s { font-size: calc(10px * var(--ui-scale)); color: var(--text-3);
+                  margin-top: calc(1px * var(--ui-scale)); white-space: nowrap; }
+.gauge-v { font-size: calc(31px * var(--ui-scale)); font-weight: 300;
            font-variant-numeric: tabular-nums; line-height: 1.05; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 3px 12px; flex: 0 1 auto;
           min-width: 0; overflow: hidden; align-content: center; }
 .donut-layout.side .legend { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; }
-.legend-item { display: flex; align-items: center; gap: 5px;
-               font-size: 11px; min-width: 0; }
-.legend-dot { width: .7em; height: .7em; border-radius: 2px; flex: none; }
+.legend-item { display: flex; align-items: center; gap: calc(5px * var(--ui-scale));
+               font-size: calc(11px * var(--ui-scale)); min-width: 0; }
+.legend-dot { width: .7em; height: .7em; border-radius: calc(2px * var(--ui-scale)); flex: none; }
 .legend-k { color: var(--text-2); white-space: nowrap; overflow: hidden;
             text-overflow: ellipsis; }
 .legend-v { color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; }
@@ -742,22 +749,22 @@ body.editing .fin-layers { display: none; }
 /* ----------------------------------------------------- savings projection */
 
 .proj { flex: 1; min-height: 0; display: flex; flex-direction: column;
-        overflow: hidden; gap: 4px; container-type: inline-size; }
-.proj-head { display: flex; align-items: flex-start; gap: 10px; flex: none; }
+        overflow: hidden; gap: calc(4px * var(--ui-scale)); container-type: inline-size; }
+.proj-head { display: flex; align-items: flex-start; gap: calc(10px * var(--ui-scale)); flex: none; }
 .proj-head-main { min-width: 0; flex: 1; }
-.proj-actions { display: flex; gap: 4px; flex: none; flex-wrap: wrap;
+.proj-actions { display: flex; gap: calc(4px * var(--ui-scale)); flex: none; flex-wrap: wrap;
                 justify-content: flex-end; }
 .proj-btn {
-  min-height: 30px; padding: 0 10px;
+  min-height: calc(30px * var(--ui-scale)); padding: 0 10px;
   border: 1px solid var(--line); background: var(--surface-2); color: var(--text-2);
-  border-radius: var(--r-ctl); font-size: 12px; cursor: pointer; white-space: nowrap;
+  border-radius: var(--r-ctl); font-size: calc(12px * var(--ui-scale)); cursor: pointer; white-space: nowrap;
 }
 .proj-btn:active { background: var(--surface-3); color: var(--text); }
 .proj-btn-icon { padding: 0 8px; display: grid; place-items: center; }
 
 /* The plot claims every gesture inside it: two fingers here mean zoom, not a
    page change. touch-action:none is what stops the pager ever seeing them. */
-.proj-plot { flex: 1 1 auto; min-height: 60px; touch-action: none; }
+.proj-plot { flex: 1 1 auto; min-height: calc(40px * var(--ui-scale)); touch-action: none; }
 .tchart { display: block; width: 100%; height: 100%; }
 .tchart-line { stroke-width: 2; vector-effect: non-scaling-stroke;
                stroke-linejoin: round; stroke-linecap: round; }
@@ -765,13 +772,13 @@ body.editing .fin-layers { display: none; }
 
 .proj-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; flex: none;
                align-content: flex-start; overflow: hidden; }
-.proj-legend-item { display: flex; align-items: center; gap: 6px;
-                    font-size: 12px; min-width: 0; }
+.proj-legend-item { display: flex; align-items: center; gap: calc(6px * var(--ui-scale));
+                    font-size: calc(12px * var(--ui-scale)); min-width: 0; }
 .proj-legend-k { color: var(--text-2); white-space: nowrap; overflow: hidden;
                  text-overflow: ellipsis; }
 .proj-legend-v { color: var(--text); font-variant-numeric: tabular-nums;
                  margin-left: auto; white-space: nowrap; }
-.proj-note { font-size: 10px; color: var(--text-3); flex: none;
+.proj-note { font-size: calc(10px * var(--ui-scale)); color: var(--text-3); flex: none;
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Small boxes shed the chrome before the chart. */
@@ -787,14 +794,14 @@ body.editing .fin-layers { display: none; }
 }
 
 .proj-cfg { padding: 12px 0; border-bottom: 1px solid var(--line); }
-.proj-cfg-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
-.proj-cfg-name { font-weight: 500; font-size: 15px; }
-.proj-cfg-bal { margin-left: auto; color: var(--text-3); font-size: 13px;
+.proj-cfg-head { display: flex; align-items: baseline; gap: calc(10px * var(--ui-scale)); margin-bottom: 6px; }
+.proj-cfg-name { font-weight: 500; font-size: calc(15px * var(--ui-scale)); }
+.proj-cfg-bal { margin-left: auto; color: var(--text-3); font-size: calc(13px * var(--ui-scale));
                 font-variant-numeric: tabular-nums; }
-.proj-cfg-fields { display: flex; gap: 12px; }
+.proj-cfg-fields { display: flex; gap: calc(12px * var(--ui-scale)); }
 .proj-cfg-fields .field { flex: 1; }
-.proj-recent { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 6px; }
-.proj-recent-item { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums;
+.proj-recent { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: calc(6px * var(--ui-scale)); }
+.proj-recent-item { font-size: calc(11px * var(--ui-scale)); color: var(--text-3); font-variant-numeric: tabular-nums;
                     background: var(--surface-2); border-radius: var(--r-chip); padding: 2px 6px; }
 
 .field-disabled { opacity: .42; pointer-events: none; }

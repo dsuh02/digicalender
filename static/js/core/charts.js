@@ -23,6 +23,8 @@
  *     finger, so interactive charts lay invisible hit areas over the top.
  */
 
+import { scaleOf } from './scale.js';
+
 const NS = 'http://www.w3.org/2000/svg';
 
 /** Series colours, in the order they look best together. */
@@ -63,11 +65,14 @@ export function autoSize(host, draw) {
     const w = Math.floor(host.clientWidth);
     const h = Math.floor(host.clientHeight);
     if (w < 2 || h < 2) return;                 // display:none, or mid-layout
-    const key = `${w}x${h}`;
+    const s = scaleOf(host);
+    // Scale is part of the key: changing the size slider must redraw even when
+    // the box has not moved a pixel.
+    const key = `${w}x${h}@${s}`;
     if (key === last) return;
     last = key;
     while (host.firstChild) host.removeChild(host.firstChild);
-    const node = draw(w, h);
+    const node = draw(w, h, s);
     if (node) host.append(node);
   };
   // rAF, so measurement happens after layout rather than inside the observer
@@ -99,10 +104,11 @@ export function observeSize(host, onSize) {
     const w = Math.floor(host.clientWidth);
     const h = Math.floor(host.clientHeight);
     if (w < 2 || h < 2) return;
-    const key = `${w}x${h}`;
+    const s = scaleOf(host);
+    const key = `${w}x${h}@${s}`;
     if (key === last) return;
     last = key;
-    onSize(w, h);
+    onSize(w, h, s);
   };
   const ro = new ResizeObserver(() => {
     if (frame) cancelAnimationFrame(frame);
@@ -178,17 +184,21 @@ export function compactMoney(v) {
  * Every adaptive decision lives here rather than being sprinkled through the
  * chart functions, so "what does a short wide box do" has one answer to read.
  */
-export function fit(w, h) {
+export function fit(w, h, scale = 1) {
   // Type scales with the box and is floored at 5px rather than 9px. 5px is not
   // comfortable, and it is not meant to be: the widget's zoom (core/scale.js)
   // is what makes small boxes legible, and this floor exists only so a chart
   // squeezed into a couple of cells still DRAWS its axis instead of dropping
   // it. Rendering something small is the user's call; deciding for them that
   // they get nothing is not.
-  const font = Math.max(5, Math.min(15, Math.round(Math.min(w, h) / 16)));
+  // The widget's --ui-scale multiplies chart type the same way it multiplies
+  // every CSS size, so a chart tracks the rest of the widget instead of drifting
+  // out of step with the labels beside it.
+  const k = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const font = Math.max(5, Math.min(15, Math.round(Math.min(w, h) / 16)) * k);
   // Axes appear as soon as there is physically room to put a number and a line
   // in the box. Everything below that is still drawn, just tight.
-  const axis = w >= 70 && h >= 42;
+  const axis = w >= 70 * k && h >= 42 * k;
   const yTicks = h < 90 ? 2 : h < 130 ? 2 : h < 220 ? 3 : h < 340 ? 4 : 5;
   return {
     font, axis, yTicks,
@@ -211,10 +221,10 @@ export function areaChart(opts) {
   const {
     series = [], labels = [], width = 320, height = 140,
     showAxis = null, smooth = true, baseline = null,
-    onHover = null, format = compactMoney,
+    onHover = null, format = compactMoney, scale = 1,
   } = opts;
 
-  const F = fit(width, height);
+  const F = fit(width, height, scale);
   const live = series.filter(s => (s.values || []).some(v => Number.isFinite(v)));
   const svg = svgRoot(width, height, 'chart chart-area');
   if (!live.length) return svg;
@@ -368,10 +378,10 @@ function hashish(s) {
 export function barChart(opts) {
   const {
     groups = [], width = 320, height = 140, showAxis = null,
-    format = compactMoney, onHover = null, signed = false,
+    format = compactMoney, onHover = null, signed = false, scale = 1,
   } = opts;
 
-  const F = fit(width, height);
+  const F = fit(width, height, scale);
   const svg = svgRoot(width, height, 'chart chart-bars');
   if (!groups.length) return svg;
   const axis = showAxis === null ? F.axis : (showAxis && F.axis);

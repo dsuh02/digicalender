@@ -79,7 +79,7 @@ export function timeChart(opts = {}) {
   const onReadout = opts.onReadout || (() => {});
   const onView = opts.onView || (() => {});
 
-  let W = 320, H = 200;
+  let W = 320, H = 200, K = 1;
   let i0 = 0, i1 = Math.max(1, months.length - 1);
 
   const svg = n('svg', { class: 'chart tchart' });
@@ -119,7 +119,9 @@ export function timeChart(opts = {}) {
   let padL = 40, padR = 4, padT = 8, padB = 18, pw = 1, ph = 1, font = 10;
 
   function layout() {
-    font = Math.max(9, Math.min(15, Math.round(Math.min(W, H) / 16)));
+    // Same multiplier the rest of the widget uses, so the axis never drifts out
+    // of step with the labels beside it.
+    font = Math.max(5, Math.min(15, Math.round(Math.min(W, H) / 16)) * K);
     padT = Math.round(font * 0.7);
     padR = Math.max(3, Math.round(font * 0.4));
     padB = font + 6;
@@ -406,7 +408,7 @@ export function timeChart(opts = {}) {
 
   return {
     node: svg,
-    setSize(w, h) { W = w; H = h; render(); },
+    setSize(w, h, k = K) { W = w; H = h; K = (k > 0 ? k : 1); render(); },
     setMode(m) {
       mode = m === 'stacked' ? 'stacked' : 'lines';
       render();

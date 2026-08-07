@@ -117,7 +117,9 @@ def run(alarm: dict, *, log=None) -> dict:
     app_id = (alarm.get("app_id") or SPOTIFY_ROKU_APP).strip()
     if device and app_id:
         def launch():
-            res = _adapter(device).command("launch_app", {"app_id": app_id})
+            # "launch", not "launch_app" — the adapter's vocabulary, verified
+            # against devices/roku.py rather than guessed from the endpoint name.
+            res = _adapter(device).command("launch", {"app_id": app_id})
             if not res.ok:
                 raise RuntimeError(res.message or "the Roku refused the launch")
             return f"channel {app_id}"

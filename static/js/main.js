@@ -643,7 +643,7 @@ async function openSettings(initialTab = 'Theme') {
   const views = { Theme: renderThemeTab, People: renderPeople,
                   Calendars: renderCalendars, Money: renderMoney,
                   Galleries: renderGalleries, Devices: renderDevices,
-                  Display: renderDisplay };
+                  Alarms: renderAlarms, Display: renderDisplay };
   let active = views[initialTab] ? initialTab : 'Theme';
   const paint = async () => {
     clear(tabs);
@@ -1376,6 +1376,337 @@ async function editPerson(p) {
 
 /* Gallery sets: named folders of images on disk. Deleting a set (or a widget
    showing it) never deletes files; only the per-image ✕ does, deliberately. */
+
+/* ------------------------------------------------------------------ alarms */
+
+const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/**
+ * Wake-up routines, and the Spotify connection they need.
+ *
+ * The authorisation is a copy-paste round trip on purpose: Spotify only accepts
+ * HTTPS or loopback redirect URIs, so a LAN address cannot be registered. You
+ * authorise wherever there is a keyboard, land on a 127.0.0.1 page that fails to
+ * load, and paste that failed address back. Only its ?code= matters.
+ */
+async function renderAlarms() {
+  const wrap = el('div');
+  let sp = null;
+  let data = { alarms: [], spotify_app_id: '22297' };
+  try { sp = await api.spotify(); } catch { sp = null; }
+  try { data = await api.alarms(); } catch (e) { return el('p.sheet-note', { text: e.message }); }
+
+  /* --- Spotify connection --- */
+  wrap.append(el('h3.form-section', { text: 'Spotify' }));
+
+  if (!sp || !sp.configured) {
+    wrap.append(el('p.sheet-note', {
+      text: 'Add your Spotify client ID and secret below, then connect your account.',
+    }));
+  }
+
+  const cid = el('input.input', { type: 'text', placeholder: 'Client ID',
+                                  value: state.settings.spotify_client_id || '' });
+  const sec = el('input.input', { type: 'password', placeholder: 'Client secret',
+                                  value: state.settings.spotify_client_secret || '' });
+  wrap.append(
+    el('label.field', {}, [el('span.field-label', { text: 'Client ID' }), cid]),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'Client secret' }), sec,
+      el('span.field-help', {
+        text: `Register this exact redirect URI in your Spotify app: ${(sp && sp.redirect_uri) || 'http://127.0.0.1:8080/api/spotify/callback'}`,
+      }),
+    ]),
+    el('div.dev-actions', {}, [
+      el('button.btn', {
+        text: 'Save keys', onclick: async (e) => {
+          e.preventDefault();
+          const patch = {
+            spotify_client_id: cid.value.trim(),
+            spotify_client_secret: sec.value.trim(),
+          };
+          try {
+            state.settings = await api.saveSettings(patch);
+            toast('Saved');
+            openSettings('Alarms');
+          } catch (err) { toast(err.message, true); }
+        },
+      }),
+    ]),
+  );
+
+  if (sp && sp.connected) {
+    const who = sp.user ? `${sp.user.name}${sp.user.product ? ` · ${sp.user.product}` : ''}` : 'connected';
+    wrap.append(el('p.sheet-note', { text: `Connected as ${who}` }));
+    if (sp.user && sp.user.product && sp.user.product !== 'premium') {
+      wrap.append(el('p.sheet-note.warn-note', {
+        text: 'Spotify only allows apps to control playback on Premium accounts — alarms will not be able to start music on this one.',
+      }));
+    }
+    if (sp.devices && sp.devices.length) {
+      wrap.append(el('div.field-help', {
+        text: 'Connect devices seen right now: ' + sp.devices.map(d => d.name).join(', '),
+      }));
+    } else {
+      wrap.append(el('div.field-help', {
+        text: 'No Spotify Connect devices are awake right now. Open Spotify on the Roku once so it registers, then reopen this tab to see its name.',
+      }));
+    }
+    wrap.append(el('div.dev-actions', {}, [
+      el('button.btn.btn-small', {
+        text: 'Disconnect', onclick: async () => {
+          try { await api.spotifyDisconnect(); openSettings('Alarms'); }
+          catch (e) { toast(e.message, true); }
+        },
+      }),
+    ]));
+  } else if (sp && sp.configured) {
+    const paste = el('input.input', { type: 'text', placeholder: 'Paste the address you were sent to' });
+    const linkBox = el('div');
+    wrap.append(
+      el('div.dev-actions', {}, [
+        el('button.btn.btn-primary', {
+          text: 'Authorise Spotify', onclick: async (e) => {
+            e.preventDefault();
+            try {
+              const url = await api.spotifyAuthorize();
+              clear(linkBox);
+              linkBox.append(
+                el('div.field-help', {
+                  text: 'Open this on a phone or laptop and approve. You will land on a 127.0.0.1 page that fails to load — that is expected. Copy its whole address and paste it below.',
+                }),
+                el('a.link-url', { href: url, target: '_blank', rel: 'noreferrer', text: url }),
+              );
+            } catch (err) { toast(err.message, true); }
+          },
+        }),
+      ]),
+      linkBox,
+      el('label.field', {}, [el('span.field-label', { text: 'Redirected address' }), paste]),
+      el('div.dev-actions', {}, [
+        el('button.btn', {
+          text: 'Finish connecting', onclick: async () => {
+            try { await api.spotifyComplete(paste.value); toast('Spotify connected'); openSettings('Alarms'); }
+            catch (e) { toast(e.message, true); }
+          },
+        }),
+      ]),
+    );
+  }
+
+  /* --- the alarms themselves --- */
+  wrap.append(el('h3.form-section', { text: 'Wake-up routines' }));
+  if (!data.alarms.length) {
+    wrap.append(el('p.sheet-note', {
+      text: 'No alarms yet. One turns on a Roku, waits for it to boot, opens Spotify and starts playing.',
+    }));
+  }
+
+  const list = el('div.dev-list');
+  for (const a of data.alarms) {
+    const days = (a.days && a.days.length)
+      ? a.days.map(d => DAY_LABELS[d]).join(' ')
+      : 'every day';
+    list.append(el('div.dev-row', {}, [
+      el('div.dev-main', {}, [
+        el('div.dev-name', { text: `${a.at_time}  ${a.name}${a.enabled ? '' : '  (off)'}` }),
+        el('div.dev-meta', { text: `${days}${a.volume != null ? ` · ${a.volume}%` : ''}` }),
+        a.last_result ? el('div.dev-meta', { text: `last run: ${a.last_result}` }) : null,
+      ]),
+      el('button.btn.btn-small', {
+        text: 'Test', onclick: async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          btn.textContent = 'Running…';
+          try {
+            const r = await api.runAlarm(a.id);
+            showAlarmRun(a, r);
+          } catch (err) { toast(err.message, true); }
+          btn.disabled = false;
+          btn.textContent = 'Test';
+        },
+      }),
+      el('button.btn.btn-small', { text: 'Edit', onclick: () => editAlarm(a, data) }),
+    ]));
+  }
+  wrap.append(list);
+  wrap.append(el('div.dev-actions', {}, [
+    el('button.btn.btn-primary', {
+      text: '+ New alarm',
+      onclick: () => editAlarm({
+        name: 'Wake up', at_time: '07:00', days: [], enabled: true,
+        wait_seconds: 13, volume: 40, app_id: data.spotify_app_id,
+        spotify_uri: '', device_name: '', shuffle: false,
+      }, data),
+    }),
+  ]));
+  return wrap;
+}
+
+/** The step-by-step result of a run — the whole point of the Test button. */
+function showAlarmRun(alarm, res) {
+  const body = el('div');
+  body.append(el('p.sheet-note', { text: res.ok ? 'Ran clean.' : 'Some steps failed.' }));
+  const list = el('div.dev-list');
+  for (const s of res.steps || []) {
+    list.append(el('div.dev-row', {}, [
+      el('span.src-dot', { style: { background: s.ok ? 'var(--good)' : 'var(--danger)' } }),
+      el('div.dev-main', {}, [
+        el('div.dev-name', { text: s.step }),
+        el('div.dev-meta', { text: `${s.detail || (s.ok ? 'ok' : 'failed')} · ${s.ms}ms` }),
+      ]),
+    ]));
+  }
+  body.append(list);
+  openSheet({ title: `${alarm.name}`, body, actions: [{ label: 'Done', kind: 'primary', onClick: close }] });
+}
+
+async function editAlarm(alarm, data) {
+  const isNew = !alarm.id;
+  const devices = (await api.devices().catch(() => [])).filter(d => d.kind === 'roku');
+
+  const body = el('div');
+  const name = el('input.input', { type: 'text', value: alarm.name || '' });
+  const at = el('input.input', { type: 'time', value: alarm.at_time || '07:00' });
+  const wait = el('input.input', { type: 'number', min: 0, max: 120, value: alarm.wait_seconds ?? 13 });
+  const vol = el('input.input', { type: 'number', min: 0, max: 100,
+                                  value: alarm.volume == null ? '' : alarm.volume });
+  const uri = el('input.input', { type: 'text', value: alarm.spotify_uri || '',
+                                  placeholder: 'spotify:playlist:… or an open.spotify.com link' });
+  const connectName = el('input.input', { type: 'text', value: alarm.device_name || '',
+                                          placeholder: 'e.g. Roku Ultra LT' });
+  const enabled = el('input.switch-input', { type: 'checkbox' });
+  enabled.checked = alarm.enabled !== false;
+  const shuffle = el('input.switch-input', { type: 'checkbox' });
+  shuffle.checked = !!alarm.shuffle;
+
+  const devSel = el('select.input');
+  devSel.append(el('option', { value: '', text: '— pick a Roku —' }));
+  devices.forEach(d => {
+    const o = el('option', { value: d.id, text: `${d.name} (${d.config?.ip || '?'})` });
+    if (d.id === alarm.device_id) o.selected = true;
+    devSel.append(o);
+  });
+
+  const dayRow = el('div.day-row');
+  const dayBtns = DAY_LABELS.map((lbl, i) => {
+    const on = (alarm.days || []).includes(i);
+    const b = el('button.day-btn', { type: 'button', text: lbl, 'aria-pressed': String(on) });
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+    });
+    dayRow.append(b);
+    return b;
+  });
+
+  /* Search, so nobody has to know what a URI is. */
+  const searchBox = el('input.input', { type: 'text', placeholder: 'Search your Spotify…' });
+  const results = el('div.dev-list');
+  searchBox.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    clear(results);
+    try {
+      const rows = await api.spotifySearch(searchBox.value);
+      if (!rows.length) results.append(el('p.sheet-note', { text: 'Nothing found.' }));
+      rows.forEach(r => results.append(el('div.dev-row', {}, [
+        el('div.dev-main', {}, [
+          el('div.dev-name', { text: r.name }),
+          el('div.dev-meta', { text: `${r.kind}${r.by ? ` · ${r.by}` : ''}` }),
+        ]),
+        el('button.btn.btn-small', {
+          text: 'Use', onclick: (ev) => { ev.preventDefault(); uri.value = r.uri; toast(r.name); },
+        }),
+      ])));
+    } catch (err) { results.append(el('p.sheet-note', { text: err.message })); }
+  });
+
+  body.append(
+    el('label.field', {}, [el('span.field-label', { text: 'Name' }), name]),
+    el('label.field', {}, [el('span.field-label', { text: 'Time' }), at]),
+    el('div.field', {}, [
+      el('span.field-label', { text: 'Days' }), dayRow,
+      el('span.field-help', { text: 'None selected means every day.' }),
+    ]),
+    el('label.row-toggle', {}, [
+      el('span.field-label', { text: 'Enabled' }), enabled, el('span.switch'),
+    ]),
+
+    el('h3.form-section', { text: 'Sequence' }),
+    el('label.field', {}, [el('span.field-label', { text: 'Roku' }), devSel]),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'Wait before opening Spotify (seconds)' }), wait,
+      el('span.field-help', { text: 'Time for the box to boot and the TV to switch input.' }),
+    ]),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'Spotify Connect device name' }), connectName,
+      el('span.field-help', {
+        text: 'Matched by name once the Roku app registers itself. Leave blank to take whatever device appears first.',
+      }),
+    ]),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'Volume (%)' }), vol,
+      el('span.field-help', {
+        text: 'Set inside Spotify. A Roku box has no volume of its own — the TV or soundbar owns the real level, so set that once by hand and use this for fine control. Leave blank to change nothing.',
+      }),
+    ]),
+    el('label.row-toggle', {}, [
+      el('span.field-label', { text: 'Shuffle' }), shuffle, el('span.switch'),
+    ]),
+
+    el('h3.form-section', { text: 'What to play' }),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'Spotify link or URI' }), uri,
+      el('span.field-help', {
+        text: 'Your own playlists, albums, artists and tracks. Spotify blocks apps from starting DJ, Daily Mix and Discover Weekly — those cannot be automated by anyone.',
+      }),
+    ]),
+    el('label.field', {}, [el('span.field-label', { text: 'Search' }), searchBox]),
+    results,
+  );
+
+  const collect = () => ({
+    name: name.value.trim() || 'Alarm',
+    at_time: at.value,
+    days: dayBtns.map((b, i) => (b.getAttribute('aria-pressed') === 'true' ? i : -1)).filter(i => i >= 0),
+    enabled: enabled.checked,
+    device_id: devSel.value || null,
+    app_id: alarm.app_id || data.spotify_app_id,
+    wait_seconds: Number(wait.value) || 0,
+    volume: vol.value === '' ? null : Number(vol.value),
+    spotify_uri: uri.value.trim(),
+    device_name: connectName.value.trim(),
+    shuffle: shuffle.checked,
+  });
+
+  const actions = [
+    { label: 'Cancel', onClick: close },
+    {
+      label: 'Save', kind: 'primary', onClick: async () => {
+        try {
+          if (isNew) await api.createAlarm(collect());
+          else await api.updateAlarm(alarm.id, collect());
+          close();
+          openSettings('Alarms');
+        } catch (e) { toast(e.message, true); }
+      },
+    },
+  ];
+  if (!isNew) {
+    actions.unshift({
+      label: 'Delete', onClick: () => {
+        close();
+        confirmSheet('Delete this alarm?', `“${alarm.name}” will stop running.`, async () => {
+          try { await api.deleteAlarm(alarm.id); } catch (e) { toast(e.message, true); }
+          openSettings('Alarms');
+        });
+      },
+    });
+  }
+  openSheet({ title: isNew ? 'New alarm' : 'Edit alarm', body, actions });
+}
+
 async function renderGalleries() {
   const wrap = el('div');
   let sets = [];

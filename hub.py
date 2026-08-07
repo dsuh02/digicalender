@@ -232,6 +232,11 @@ def _presence_loop(stop: threading.Event) -> None:
         stop.wait(PRESENCE_INTERVAL)
 
 
+def _alarm_loop(stop: threading.Event) -> None:
+    import alarms
+    alarms.loop(stop, bus)
+
+
 FINANCE_INTERVAL = 6 * 3600.0     # balances move slowly; Plaid calls are metered
 
 
@@ -278,7 +283,8 @@ def start() -> None:
                      (_reminder_loop, "reminder-ticker"),
                      (_feed_loop, "feed-sync"),
                      (_presence_loop, "presence"),
-                     (_finance_loop, "finance-sync")):
+                     (_finance_loop, "finance-sync"),
+                     (_alarm_loop, "alarms")):
         t = threading.Thread(target=fn, args=(_stop,), name=name, daemon=True)
         t.start()
         _threads.append(t)

@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import alarms as alarm_engine
 import devices as device_registry
 import feeds
 import finance
@@ -31,6 +32,7 @@ import ics
 import plaid
 import projection
 import providers
+import spotify as spotify_api
 import store
 import weather
 
@@ -137,6 +139,39 @@ def _int(body: dict, key: str, lo: int, hi: int, default: int | None = None) -> 
     if not lo <= n <= hi:
         raise ApiError(400, f"{key} must be between {lo} and {hi}")
     return n
+
+
+def _alarm_body(b: dict, partial: bool = False) -> dict:
+    out: dict = {}
+    if "at_time" in b or not partial:
+        t = str(b.get("at_time") or "").strip()
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
+            raise ApiError(400, "at_time must be HH:MM in 24-hour time")
+        out["at_time"] = t
+    if "days" in b:
+        days = b.get("days") or []
+        if not isinstance(days, list):
+            raise ApiError(400, "days must be a list of weekday numbers (Monday = 0)")
+        out["days"] = sorted({int(d) for d in days if 0 <= int(d) <= 6})
+    for f, cap in (("name", 60), ("app_id", 16), ("device_name", 80)):
+        if f in b:
+            out[f] = str(b.get(f) or "")[:cap]
+    if "device_id" in b:
+        out["device_id"] = b["device_id"] or None
+    if "wait_seconds" in b:
+        out["wait_seconds"] = _int(b, "wait_seconds", 0, 120)
+    if "volume" in b:
+        # NULL is meaningful: leave the speaker wherever it was.
+        out["volume"] = None if b["volume"] in (None, "") else _int(b, "volume", 0, 100)
+    if "spotify_uri" in b:
+        try:
+            out["spotify_uri"] = alarm_engine.validate_uri(str(b.get("spotify_uri") or ""))
+        except ValueError as e:
+            raise ApiError(400, str(e))
+    for f in ("enabled", "shuffle"):
+        if f in b:
+            out[f] = bool(b[f])
+    return out
 
 
 def validate_geometry(body: dict, partial: bool = False) -> dict:
@@ -833,6 +868,104 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 days = 180
             return self._json(200, {"series": store.finance_networth_series(days)})
+
+
+        # ------------------------------------------------------------ spotify
+        if path == "/api/spotify" and method == "GET":
+            out = {"configured": spotify_api.configured(),
+                   "connected": spotify_api.connected(),
+                   "redirect_uri": spotify_api.REDIRECT_URI, "user": None, "devices": []}
+            if out["connected"]:
+                try:
+                    me = spotify_api.me()
+                    out["user"] = {"name": me.get("display_name") or me.get("id"),
+                                   "product": me.get("product")}
+                    out["devices"] = [{"id": d.get("id"), "name": d.get("name"),
+                                       "type": d.get("type"), "active": d.get("is_active")}
+                                      for d in spotify_api.devices()]
+                except spotify_api.SpotifyError as e:
+                    out["error"] = e.message
+            return self._json(200, out)
+
+        if path == "/api/spotify/authorize" and method == "POST":
+            try:
+                return self._json(200, {"url": spotify_api.authorize_url()})
+            except spotify_api.SpotifyError as e:
+                raise ApiError(400, e.message)
+
+        if path == "/api/spotify/complete" and method == "POST":
+            try:
+                code = spotify_api.code_from_redirect(str(self._body().get("redirect") or ""))
+                spotify_api.exchange_code(code)
+            except spotify_api.SpotifyError as e:
+                raise ApiError(400, e.message)
+            hub.bus.publish("alarms_changed", {})
+            return self._json(200, {"connected": True})
+
+        if path == "/api/spotify/disconnect" and method == "POST":
+            spotify_api.disconnect()
+            return self._json(200, {"connected": False})
+
+        if path == "/api/spotify/search" and method == "GET":
+            term = (qs.get("q") or [""])[0].strip()
+            if not term:
+                raise ApiError(400, "q is required")
+            try:
+                res = spotify_api.search(term)
+            except spotify_api.SpotifyError as e:
+                raise ApiError(400, e.message)
+            out = []
+            for kind in ("playlists", "albums", "artists", "tracks"):
+                for it in ((res.get(kind) or {}).get("items") or [])[:5]:
+                    if not it:
+                        continue
+                    if kind in ("albums", "tracks"):
+                        by = ", ".join(a.get("name", "") for a in (it.get("artists") or []))
+                    elif kind == "playlists":
+                        by = (it.get("owner") or {}).get("display_name") or ""
+                    else:
+                        by = ""
+                    out.append({"uri": it.get("uri"), "name": it.get("name"),
+                                "kind": kind[:-1], "by": by})
+            return self._json(200, {"results": out})
+
+        # ------------------------------------------------------------- alarms
+        if path == "/api/alarms":
+            if method == "GET":
+                return self._json(200, {"alarms": store.list_alarms(),
+                                        "spotify_app_id": alarm_engine.SPOTIFY_ROKU_APP})
+            if method == "POST":
+                a = store.create_alarm(_alarm_body(self._body()))
+                hub.bus.publish("alarms_changed", {})
+                return self._json(201, {"alarm": a})
+            raise ApiError(405, "method not allowed")
+
+        m = re.fullmatch(rf"/api/alarms/{ID_RE}", path)
+        if m:
+            al = store.get_alarm(m.group(1))
+            if not al:
+                raise ApiError(404, "alarm not found")
+            if method == "PATCH":
+                a = store.update_alarm(al["id"], _alarm_body(self._body(), partial=True))
+                hub.bus.publish("alarms_changed", {})
+                return self._json(200, {"alarm": a})
+            if method == "DELETE":
+                store.delete_alarm(al["id"])
+                hub.bus.publish("alarms_changed", {})
+                return self._json(200, {"ok": True})
+            raise ApiError(405, "method not allowed")
+
+        m = re.fullmatch(rf"/api/alarms/{ID_RE}/run", path)
+        if m and method == "POST":
+            al = store.get_alarm(m.group(1))
+            if not al:
+                raise ApiError(404, "alarm not found")
+            # Inline: it takes ~40s and the caller wants the step-by-step result,
+            # which is the entire point of a test button.
+            res = alarm_engine.run(al)
+            store.mark_alarm_fired(al["id"], al.get("last_fired") or "", res["message"])
+            hub.bus.publish("alarms_changed", {})
+            return self._json(200, res)
 
         if path == "/api/finance/projection":
             if method == "GET":

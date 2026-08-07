@@ -101,6 +101,19 @@ export const api = {
   updateFinanceAccount: (id, d) => req(`/api/finance/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.account),
   deleteFinanceAccount: id => req(`/api/finance/accounts/${id}`, { method: 'DELETE' }),
 
+  // spotify + alarms
+  spotify: () => req('/api/spotify'),
+  spotifyAuthorize: () => req('/api/spotify/authorize', { method: 'POST' }).then(r => r.url),
+  spotifyComplete: redirect => req('/api/spotify/complete', {
+    method: 'POST', body: JSON.stringify({ redirect }) }),
+  spotifyDisconnect: () => req('/api/spotify/disconnect', { method: 'POST' }),
+  spotifySearch: q => req(`/api/spotify/search?q=${encodeURIComponent(q)}`).then(r => r.results),
+  alarms: () => req('/api/alarms'),
+  createAlarm: d => req('/api/alarms', { method: 'POST', body: JSON.stringify(d) }).then(r => r.alarm),
+  updateAlarm: (id, d) => req(`/api/alarms/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.alarm),
+  deleteAlarm: id => req(`/api/alarms/${id}`, { method: 'DELETE' }),
+  runAlarm: id => req(`/api/alarms/${id}/run`, { method: 'POST' }),
+
   // household members
   people: () => req('/api/people').then(r => r.people),
   createPerson: d => req('/api/people', { method: 'POST', body: JSON.stringify(d) }).then(r => r.person),

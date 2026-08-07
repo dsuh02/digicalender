@@ -256,6 +256,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ftx_external
     ON finance_transactions(item_id, external_id) WHERE external_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ftx_date ON finance_transactions(posted_on DESC);
 
+-- Wake-up routines: a time, some days, and a sequence to run on a device.
+--
+-- `last_fired` is a LOCAL DATE STRING, not a timestamp. The scheduler asks
+-- "has this already gone off today?", and a date is the honest shape for that
+-- question — it also makes a restart mid-morning idempotent instead of
+-- re-firing the alarm.
+--
+-- `days` is a JSON array of weekday numbers, Monday=0, matching date.weekday().
+CREATE TABLE IF NOT EXISTS alarms (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL DEFAULT 'Alarm',
+    enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+    at_time       TEXT NOT NULL,                 -- 'HH:MM', local
+    days          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    device_id     TEXT REFERENCES devices(id) ON DELETE SET NULL,
+    app_id        TEXT NOT NULL DEFAULT '',      -- Roku channel id
+    wait_seconds  INTEGER NOT NULL DEFAULT 13,
+    volume        INTEGER,                       -- Spotify Connect %, NULL = leave alone
+    spotify_uri   TEXT NOT NULL DEFAULT '',
+    device_name   TEXT NOT NULL DEFAULT '',      -- Connect target, matched by name
+    shuffle       BOOLEAN NOT NULL DEFAULT FALSE,
+    last_fired    TEXT,
+    last_result   TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alarms_live ON alarms(enabled, at_time);
+
 -- Gallery sets: one row per set, one folder per set under galleries/ on disk.
 -- The DB stores names + order; the FILES are the user's and outlive both the
 -- widgets showing them and (deliberately) the set row itself.
@@ -335,7 +362,7 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _dedupe_finance_items() -> None:
@@ -394,6 +421,9 @@ def init_db() -> None:
         # because finance_items already exists on any v6 database.
         q("ALTER TABLE finance_items ADD COLUMN IF NOT EXISTS tx_cursor TEXT")
         q("UPDATE schema_version SET version = 7")
+    if row["version"] < 8:
+        # v8: alarms — created by SCHEMA above; only the version moves.
+        q("UPDATE schema_version SET version = 8")
 
 
 # --------------------------------------------------------------------- events
@@ -1101,6 +1131,55 @@ def finance_recent_transactions(limit: int = 25) -> list[dict]:
                 LEFT JOIN finance_accounts a ON t.account_id = a.id
                 ORDER BY t.posted_on DESC, t.created_at DESC LIMIT %s""",
              (limit,), fetch="all")
+
+
+# ------------------------------------------------------------------ alarms
+
+ALARM_FIELDS = ("name", "enabled", "at_time", "days", "device_id", "app_id",
+                "wait_seconds", "volume", "spotify_uri", "device_name", "shuffle")
+
+
+def list_alarms() -> list[dict]:
+    return q("SELECT * FROM alarms ORDER BY at_time, created_at", fetch="all")
+
+
+def get_alarm(aid: str) -> dict | None:
+    return q("SELECT * FROM alarms WHERE id = %s", (aid,), fetch="one")
+
+
+def create_alarm(data: dict) -> dict:
+    aid = new_uid()
+    q("""INSERT INTO alarms (id, name, enabled, at_time, days, device_id, app_id,
+             wait_seconds, volume, spotify_uri, device_name, shuffle, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+      (aid, data.get("name") or "Alarm", bool(data.get("enabled", True)),
+       data["at_time"], Jsonb(data.get("days") or []), data.get("device_id"),
+       data.get("app_id", "") or "", int(data.get("wait_seconds") or 13),
+       data.get("volume"), data.get("spotify_uri", "") or "",
+       data.get("device_name", "") or "", bool(data.get("shuffle")), now_iso()))
+    return get_alarm(aid)
+
+
+def update_alarm(aid: str, data: dict) -> dict | None:
+    sets, vals = [], []
+    for f in ALARM_FIELDS:
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(Jsonb(data[f]) if f == "days" else data[f])
+    if not sets:
+        return get_alarm(aid)
+    vals.append(aid)
+    q(f"UPDATE alarms SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_alarm(aid)
+
+
+def delete_alarm(aid: str) -> bool:
+    return q("DELETE FROM alarms WHERE id = %s", (aid,)) > 0
+
+
+def mark_alarm_fired(aid: str, day: str, result: str) -> None:
+    q("UPDATE alarms SET last_fired = %s, last_result = %s WHERE id = %s",
+      (day, result[:300], aid))
 
 
 # ------------------------------------------------------------------ people

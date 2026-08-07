@@ -23,6 +23,7 @@ import {
   normalize as normalizeTheme, resolve as resolveTheme,
 } from './core/theme.js';
 import { contentScale } from './core/scale.js';
+import { DAY_LABELS, openAlarmEditor, showAlarmRun } from './core/alarmui.js';
 import { clamp, clear, debounce, el } from './core/util.js';
 import { initials } from './widgets/people.js';
 import { CATEGORIES, WIDGETS, widgetDef } from './widgets/index.js';
@@ -61,10 +62,12 @@ async function boot() {
   dom.reloadBtn = document.getElementById('reloadBtn');
   dom.status = document.getElementById('status');
   dom.pageBtn = document.getElementById('pageBtn');
+  dom.wallBtn = document.getElementById('wallBtn');
 
   dom.editBtn.addEventListener('click', toggleEdit);
   dom.addBtn.addEventListener('click', openPalette);
   dom.settingsBtn.addEventListener('click', () => openSettings());
+  dom.wallBtn.addEventListener('click', () => setWall(!wallActive()));
   // Cache-busted so a reload can never re-serve the bundle it is trying to
   // escape — this button exists precisely for when something looks wrong.
   dom.reloadBtn.addEventListener('click', () => {
@@ -119,6 +122,7 @@ async function reload() {
   applyBrand();
   applySavedTheme();
   computeVisiblePages();
+  initWallView();
   renderTabs();
   renderAllPages();
 }
@@ -201,6 +205,70 @@ function teardownWidgets() {
  * skeleton. A handful of pages of widgets is well within budget; widgets that
  * poll do so on timers measured in minutes.
  */
+
+/* --------------------------------------------------------------- wall view */
+
+/**
+ * Show a whole page at its designed proportions, scaled to fit this screen.
+ *
+ * The grid is already proportional — widgets are placed in CELLS, not pixels —
+ * so constraining the container's aspect ratio is the whole mechanism. Nothing
+ * about the layout changes; it simply gets smaller, and each widget's own
+ * content scale shrinks its contents to match.
+ *
+ * Stored in localStorage, NOT the settings table. The panel and a phone share
+ * one database and want opposite answers: the wall wants to fill 1920x1080, the
+ * phone wants to see the shape of the room's screen. A per-install setting
+ * would make one of them wrong.
+ */
+const WALL_KEY = 'digicalender.wallView';
+
+function wallActive() {
+  return document.body.classList.contains('wall');
+}
+
+function setWall(on, { remember = true } = {}) {
+  document.body.classList.toggle('wall', !!on);
+  if (remember) {
+    try { localStorage.setItem(WALL_KEY, on ? '1' : '0'); } catch { /* private mode */ }
+  }
+  const btn = document.getElementById('wallBtn');
+  if (btn) {
+    btn.setAttribute('aria-pressed', String(!!on));
+    btn.title = on ? 'Fill the screen' : 'Fit the whole wall';
+  }
+  // Widgets measure themselves; the boxes just changed size under them.
+  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+}
+
+function initWallView() {
+  let stored = null;
+  try { stored = localStorage.getItem(WALL_KEY); } catch { stored = null; }
+
+  if (stored === null) {
+    // First look on this device. A screen far narrower than the page it is
+    // showing gets wall view by default, because the alternative is the sliver
+    // of a widget that a 48-column grid becomes on a phone.
+    const page = state.visiblePages[0];
+    const ratio = page ? (page.cols || 48) / (page.rows || 32) : 1.5;
+    const mine = window.innerWidth / Math.max(1, window.innerHeight);
+    const narrow = window.innerWidth < 820 || mine < ratio * 0.62;
+    setWall(narrow, { remember: false });
+  } else {
+    setWall(stored === '1', { remember: false });
+  }
+
+  // The kiosk is a fixed landscape panel and must never be pinched. Anything
+  // else — a phone, a laptop — should be able to zoom into a corner of the wall.
+  if (window.innerWidth < 1200) {
+    const vp = document.querySelector('meta[name="viewport"]');
+    if (vp) {
+      vp.setAttribute('content',
+        'width=device-width, initial-scale=1, viewport-fit=cover');
+    }
+  }
+}
+
 function renderAllPages() {
   teardownWidgets();
   clear(dom.pager);
@@ -212,6 +280,9 @@ function renderAllPages() {
   for (const page of state.visiblePages) {
     const pageEl = el('div.page');
     const host = el('div.grid-host');
+    // Wall view letterboxes to THIS page's proportions. Pages can be reshaped,
+    // so the ratio travels with the page rather than being a constant.
+    host.style.setProperty('--wall-ratio', String((page.cols || 48) / (page.rows || 32)));
     pageEl.append(host);
     dom.pager.append(pageEl);
 
@@ -1379,7 +1450,6 @@ async function editPerson(p) {
 
 /* ------------------------------------------------------------------ alarms */
 
-const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /**
  * Wake-up routines, and the Spotify connection they need.
@@ -1526,187 +1596,24 @@ async function renderAlarms() {
           btn.textContent = 'Test';
         },
       }),
-      el('button.btn.btn-small', { text: 'Edit', onclick: () => editAlarm(a, data) }),
+      el('button.btn.btn-small', { text: 'Edit', onclick: () => openAlarmEditor(a, data, () => openSettings('Alarms')) }),
     ]));
   }
   wrap.append(list);
   wrap.append(el('div.dev-actions', {}, [
     el('button.btn.btn-primary', {
       text: '+ New alarm',
-      onclick: () => editAlarm({
+      onclick: () => openAlarmEditor({
         name: 'Wake up', at_time: '07:00', days: [], enabled: true,
         wait_seconds: 13, volume: 40, app_id: data.spotify_app_id,
         spotify_uri: '', device_name: '', shuffle: false,
-      }, data),
+      }, data, () => openSettings('Alarms')),
     }),
   ]));
   return wrap;
 }
 
 /** The step-by-step result of a run — the whole point of the Test button. */
-function showAlarmRun(alarm, res) {
-  const body = el('div');
-  body.append(el('p.sheet-note', { text: res.ok ? 'Ran clean.' : 'Some steps failed.' }));
-  const list = el('div.dev-list');
-  for (const s of res.steps || []) {
-    list.append(el('div.dev-row', {}, [
-      el('span.src-dot', { style: { background: s.ok ? 'var(--good)' : 'var(--danger)' } }),
-      el('div.dev-main', {}, [
-        el('div.dev-name', { text: s.step }),
-        el('div.dev-meta', { text: `${s.detail || (s.ok ? 'ok' : 'failed')} · ${s.ms}ms` }),
-      ]),
-    ]));
-  }
-  body.append(list);
-  openSheet({ title: `${alarm.name}`, body, actions: [{ label: 'Done', kind: 'primary', onClick: close }] });
-}
-
-async function editAlarm(alarm, data) {
-  const isNew = !alarm.id;
-  const devices = (await api.devices().catch(() => [])).filter(d => d.kind === 'roku');
-
-  const body = el('div');
-  const name = el('input.input', { type: 'text', value: alarm.name || '' });
-  const at = el('input.input', { type: 'time', value: alarm.at_time || '07:00' });
-  const wait = el('input.input', { type: 'number', min: 0, max: 120, value: alarm.wait_seconds ?? 13 });
-  const vol = el('input.input', { type: 'number', min: 0, max: 100,
-                                  value: alarm.volume == null ? '' : alarm.volume });
-  const uri = el('input.input', { type: 'text', value: alarm.spotify_uri || '',
-                                  placeholder: 'spotify:playlist:… or an open.spotify.com link' });
-  const connectName = el('input.input', { type: 'text', value: alarm.device_name || '',
-                                          placeholder: 'e.g. Roku Ultra LT' });
-  const enabled = el('input.switch-input', { type: 'checkbox' });
-  enabled.checked = alarm.enabled !== false;
-  const shuffle = el('input.switch-input', { type: 'checkbox' });
-  shuffle.checked = !!alarm.shuffle;
-
-  const devSel = el('select.input');
-  devSel.append(el('option', { value: '', text: '— pick a Roku —' }));
-  devices.forEach(d => {
-    const o = el('option', { value: d.id, text: `${d.name} (${d.config?.ip || '?'})` });
-    if (d.id === alarm.device_id) o.selected = true;
-    devSel.append(o);
-  });
-
-  const dayRow = el('div.day-row');
-  const dayBtns = DAY_LABELS.map((lbl, i) => {
-    const on = (alarm.days || []).includes(i);
-    const b = el('button.day-btn', { type: 'button', text: lbl, 'aria-pressed': String(on) });
-    b.addEventListener('click', (e) => {
-      e.preventDefault();
-      b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
-    });
-    dayRow.append(b);
-    return b;
-  });
-
-  /* Search, so nobody has to know what a URI is. */
-  const searchBox = el('input.input', { type: 'text', placeholder: 'Search your Spotify…' });
-  const results = el('div.dev-list');
-  searchBox.addEventListener('keydown', async (e) => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    clear(results);
-    try {
-      const rows = await api.spotifySearch(searchBox.value);
-      if (!rows.length) results.append(el('p.sheet-note', { text: 'Nothing found.' }));
-      rows.forEach(r => results.append(el('div.dev-row', {}, [
-        el('div.dev-main', {}, [
-          el('div.dev-name', { text: r.name }),
-          el('div.dev-meta', { text: `${r.kind}${r.by ? ` · ${r.by}` : ''}` }),
-        ]),
-        el('button.btn.btn-small', {
-          text: 'Use', onclick: (ev) => { ev.preventDefault(); uri.value = r.uri; toast(r.name); },
-        }),
-      ])));
-    } catch (err) { results.append(el('p.sheet-note', { text: err.message })); }
-  });
-
-  body.append(
-    el('label.field', {}, [el('span.field-label', { text: 'Name' }), name]),
-    el('label.field', {}, [el('span.field-label', { text: 'Time' }), at]),
-    el('div.field', {}, [
-      el('span.field-label', { text: 'Days' }), dayRow,
-      el('span.field-help', { text: 'None selected means every day.' }),
-    ]),
-    el('label.row-toggle', {}, [
-      el('span.field-label', { text: 'Enabled' }), enabled, el('span.switch'),
-    ]),
-
-    el('h3.form-section', { text: 'Sequence' }),
-    el('label.field', {}, [el('span.field-label', { text: 'Roku' }), devSel]),
-    el('label.field', {}, [
-      el('span.field-label', { text: 'Wait before opening Spotify (seconds)' }), wait,
-      el('span.field-help', { text: 'Time for the box to boot and the TV to switch input.' }),
-    ]),
-    el('label.field', {}, [
-      el('span.field-label', { text: 'Spotify Connect device name' }), connectName,
-      el('span.field-help', {
-        text: 'Matched by name once the Roku app registers itself. Leave blank to take whatever device appears first.',
-      }),
-    ]),
-    el('label.field', {}, [
-      el('span.field-label', { text: 'Volume (%)' }), vol,
-      el('span.field-help', {
-        text: 'Set inside Spotify. A Roku box has no volume of its own — the TV or soundbar owns the real level, so set that once by hand and use this for fine control. Leave blank to change nothing.',
-      }),
-    ]),
-    el('label.row-toggle', {}, [
-      el('span.field-label', { text: 'Shuffle' }), shuffle, el('span.switch'),
-    ]),
-
-    el('h3.form-section', { text: 'What to play' }),
-    el('label.field', {}, [
-      el('span.field-label', { text: 'Spotify link or URI' }), uri,
-      el('span.field-help', {
-        text: 'Your own playlists, albums, artists and tracks. Spotify blocks apps from starting DJ, Daily Mix and Discover Weekly — those cannot be automated by anyone.',
-      }),
-    ]),
-    el('label.field', {}, [el('span.field-label', { text: 'Search' }), searchBox]),
-    results,
-  );
-
-  const collect = () => ({
-    name: name.value.trim() || 'Alarm',
-    at_time: at.value,
-    days: dayBtns.map((b, i) => (b.getAttribute('aria-pressed') === 'true' ? i : -1)).filter(i => i >= 0),
-    enabled: enabled.checked,
-    device_id: devSel.value || null,
-    app_id: alarm.app_id || data.spotify_app_id,
-    wait_seconds: Number(wait.value) || 0,
-    volume: vol.value === '' ? null : Number(vol.value),
-    spotify_uri: uri.value.trim(),
-    device_name: connectName.value.trim(),
-    shuffle: shuffle.checked,
-  });
-
-  const actions = [
-    { label: 'Cancel', onClick: close },
-    {
-      label: 'Save', kind: 'primary', onClick: async () => {
-        try {
-          if (isNew) await api.createAlarm(collect());
-          else await api.updateAlarm(alarm.id, collect());
-          close();
-          openSettings('Alarms');
-        } catch (e) { toast(e.message, true); }
-      },
-    },
-  ];
-  if (!isNew) {
-    actions.unshift({
-      label: 'Delete', onClick: () => {
-        close();
-        confirmSheet('Delete this alarm?', `“${alarm.name}” will stop running.`, async () => {
-          try { await api.deleteAlarm(alarm.id); } catch (e) { toast(e.message, true); }
-          openSettings('Alarms');
-        });
-      },
-    });
-  }
-  openSheet({ title: isNew ? 'New alarm' : 'Edit alarm', body, actions });
-}
-
 async function renderGalleries() {
   const wrap = el('div');
   let sets = [];

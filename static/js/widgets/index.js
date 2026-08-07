@@ -1,6 +1,7 @@
 /* Widget registry. Add a definition here and it appears in the palette, gets a
  * settings panel built from its schema, and can be placed on any page. */
 
+import { AlarmsWidget } from './alarms.js';
 import { AgendaWidget, DayWidget, MonthWidget, WeekWidget } from './calendar.js';
 import { AccountsWidget, BillsWidget, NetWorthWidget } from './finance.js';
 import { GalleryWidget } from './gallery.js';
@@ -17,7 +18,7 @@ export const WIDGETS = [
   TodoWidget, NotificationsWidget,
   NetWorthWidget, NetWorthChartWidget, AccountsWidget, BillsWidget,
   SpendingWidget, CashflowWidget, CreditWidget, ProjectionWidget,
-  DeviceGridWidget, ScenesWidget, RokuRemoteWidget, MediaWidget,
+  DeviceGridWidget, ScenesWidget, RokuRemoteWidget, MediaWidget, AlarmsWidget,
 ];
 
 export const BY_TYPE = Object.fromEntries(WIDGETS.map(w => [w.type, w]));

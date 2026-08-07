@@ -806,6 +806,63 @@ body.editing .fin-layers { display: none; }
 
 .field-disabled { opacity: .42; pointer-events: none; }
 
+/* ------------------------------------------------------------- alarms --- */
+
+.alarms { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.alarm-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; touch-action: pan-y;
+              display: flex; flex-direction: column; }
+.alarm-row {
+  display: flex; align-items: center; gap: calc(10px * var(--ui-scale));
+  padding: calc(9px * var(--ui-scale)) 0;
+  border-bottom: 1px solid var(--line); cursor: pointer;
+}
+.alarm-row:last-child { border-bottom: none; }
+.alarm-row:active { background: var(--surface-2); }
+.alarm-row.off { opacity: .45; }
+.alarm-main { flex: 1; min-width: 0; }
+.alarm-time { font-size: calc(24px * var(--ui-scale)); font-weight: 300;
+              letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.alarm-name { font-size: calc(13px * var(--ui-scale)); color: var(--text-2);
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alarm-meta { font-size: calc(11px * var(--ui-scale)); color: var(--text-3);
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alarm-warn { font-size: calc(11px * var(--ui-scale)); color: var(--warn);
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alarm-next { font-size: calc(11px * var(--ui-scale)); color: var(--text-3);
+              flex: none; white-space: nowrap; }
+.alarm-switch { flex: none; display: flex; align-items: center; }
+.alarm-actions { display: flex; gap: 6px; flex: none; padding-top: 8px; }
+
+/* -------------------------------------------------------- wall view --- */
+/* The whole page at its designed proportions, scaled to fit whatever screen is
+   looking at it. The grid is already proportional — every widget is placed in
+   CELLS, not pixels — so constraining the container's aspect ratio is the
+   entire mechanism. Nothing about the layout changes; it just gets smaller, and
+   each widget's own --ui-scale shrinks its contents to match.
+
+   height:100% + width:auto + aspect-ratio is the letterbox that actually holds:
+   the box takes the full height and derives its width, and max-width pulls BOTH
+   back together when width is the binding constraint. Setting width:100% and
+   clamping max-height instead breaks the ratio the moment height binds.
+
+   Per-DEVICE, not per-install: the panel and a phone share one database and
+   want opposite answers, so the toggle lives in localStorage. */
+body.wall .page {
+  display: flex; align-items: center; justify-content: center; padding: 6px;
+}
+body.wall .grid-host {
+  position: relative; inset: auto;
+  height: 100%; width: auto;
+  aspect-ratio: var(--wall-ratio, 1.5);
+  max-width: 100%; max-height: 100%;
+  padding: 4px;
+  /* A visible edge, so letterboxing reads as "this is the whole wall" rather
+     than as content that failed to fill the screen. */
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+}
+body.wall .grid { gap: 4px; }
+
 .day-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .day-btn {
   min-width: 46px; min-height: 40px; padding: 0 8px;

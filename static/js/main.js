@@ -714,7 +714,7 @@ async function openSettings(initialTab = 'Theme') {
   const views = { Theme: renderThemeTab, People: renderPeople,
                   Calendars: renderCalendars, Money: renderMoney,
                   Galleries: renderGalleries, Devices: renderDevices,
-                  Alarms: renderAlarms, Display: renderDisplay };
+                  Alarms: renderAlarms, AI: renderAI, Display: renderDisplay };
   let active = views[initialTab] ? initialTab : 'Theme';
   const paint = async () => {
     clear(tabs);
@@ -1614,6 +1614,100 @@ async function renderAlarms() {
 }
 
 /** The step-by-step result of a run — the whole point of the Test button. */
+
+/* ---------------------------------------------------------------------- ai */
+
+/**
+ * The Gemini key, and which model it should use.
+ *
+ * The model list is fetched FROM THE KEY rather than hardcoded: what a key can
+ * reach depends on its project and the month, so a literal that was right when
+ * it was written 404s for somebody else later. A renamed model should be a
+ * dropdown that changed, not a feature that broke.
+ */
+async function renderAI() {
+  const wrap = el('div');
+  let info = { configured: false, models: [], model: '' };
+  try { info = await api.ai(); } catch (e) { return el('p.sheet-note', { text: e.message }); }
+
+  const key = el('input.input', {
+    type: 'password', placeholder: 'AIza…',
+    value: state.settings.gemini_api_key || '',
+  });
+  const modelSel = el('select.input');
+
+  const fillModels = (models, chosen) => {
+    clear(modelSel);
+    if (!models.length) {
+      modelSel.append(el('option', { value: '', text: '— save a key to load models —' }));
+      return;
+    }
+    models.forEach(m => {
+      const o = el('option', {
+        value: m.id,
+        text: `${m.label} (${m.id})`,
+      });
+      if (m.id === chosen) o.selected = true;
+      modelSel.append(o);
+    });
+  };
+  fillModels(info.models || [], info.model);
+
+  const status = el('p.sheet-note');
+  if (info.error) status.textContent = info.error;
+  else if (info.configured) {
+    status.textContent = `${(info.models || []).length} models available to this key.`;
+  }
+
+  wrap.append(
+    el('h3.form-section', { text: 'Google Gemini' }),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'API key' }), key,
+      el('span.field-help', {
+        text: 'From aistudio.google.com. Stored in this panel\u2019s database, never in the repo, and sent to Google in a header rather than a URL so it stays out of logs.',
+      }),
+    ]),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'Model' }), modelSel,
+      el('span.field-help', {
+        text: 'Listed by asking your key what it can reach — nothing here is hardcoded.',
+      }),
+    ]),
+    status,
+    el('div.dev-actions', {}, [
+      el('button.btn.btn-primary', {
+        text: 'Save', onclick: async (e) => {
+          e.preventDefault();
+          try {
+            state.settings = await api.saveSettings({
+              gemini_api_key: key.value.trim(),
+              gemini_model: modelSel.value || '',
+            });
+            toast('Saved');
+            openSettings('AI');
+          } catch (err) { toast(err.message, true); }
+        },
+      }),
+      el('button.btn', {
+        text: 'Test', onclick: async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          status.textContent = 'Asking Gemini…';
+          try {
+            const r = await api.aiTest();
+            status.textContent = `Working — ${r.model} replied “${r.reply}”. ${r.models} models available.`;
+          } catch (err) { status.textContent = err.message; }
+          btn.disabled = false;
+        },
+      }),
+    ]),
+    el('p.sheet-note', {
+      text: 'On Google\u2019s free tier your prompts are used to improve their products. This panel can see your calendar, balances and household names, so point it at paid pricing before you wire it into anything that reads those.',
+    }),
+  );
+  return wrap;
+}
+
 async function renderGalleries() {
   const wrap = el('div');
   let sets = [];

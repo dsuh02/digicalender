@@ -101,6 +101,12 @@ export const api = {
   updateFinanceAccount: (id, d) => req(`/api/finance/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.account),
   deleteFinanceAccount: id => req(`/api/finance/accounts/${id}`, { method: 'DELETE' }),
 
+  // ai
+  ai: () => req('/api/ai'),
+  aiTest: () => req('/api/ai/test', { method: 'POST' }),
+  aiAsk: (prompt, opts = {}) => req('/api/ai/ask', {
+    method: 'POST', body: JSON.stringify({ prompt, ...opts }) }).then(r => r.text),
+
   // spotify + alarms
   spotify: () => req('/api/spotify'),
   spotifyAuthorize: () => req('/api/spotify/authorize', { method: 'POST' }).then(r => r.url),

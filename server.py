@@ -27,6 +27,7 @@ import alarms as alarm_engine
 import devices as device_registry
 import feeds
 import finance
+import gemini
 import hub
 import ics
 import plaid
@@ -869,6 +870,40 @@ class Handler(BaseHTTPRequestHandler):
                 days = 180
             return self._json(200, {"series": store.finance_networth_series(days)})
 
+
+
+        # ----------------------------------------------------------------- ai
+        if path == "/api/ai" and method == "GET":
+            out = {"configured": gemini.configured(), "model": gemini.model_name(),
+                   "models": []}
+            if out["configured"]:
+                try:
+                    out["models"] = gemini.list_models()
+                except gemini.GeminiError as e:
+                    out["error"] = e.message
+            return self._json(200, out)
+
+        if path == "/api/ai/test" and method == "POST":
+            try:
+                return self._json(200, gemini.check())
+            except gemini.GeminiError as e:
+                raise ApiError(400 if e.status in (0, 400, 403) else e.status, e.message)
+
+        if path == "/api/ai/ask" and method == "POST":
+            b = self._body()
+            prompt = str(b.get("prompt") or "").strip()
+            if not prompt:
+                raise ApiError(400, "prompt is required")
+            try:
+                text = gemini.generate(
+                    prompt[:8000],
+                    model=str(b.get("model") or ""),
+                    system=str(b.get("system") or "")[:4000],
+                    max_tokens=_int(b, "max_tokens", 64, 4096, 800),
+                )
+            except gemini.GeminiError as e:
+                raise ApiError(400 if e.status in (0, 400, 403) else e.status, e.message)
+            return self._json(200, {"text": text})
 
         # ------------------------------------------------------------ spotify
         if path == "/api/spotify" and method == "GET":

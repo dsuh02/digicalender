@@ -31,7 +31,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 from psycopg.rows import dict_row
@@ -256,6 +256,130 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ftx_external
     ON finance_transactions(item_id, external_id) WHERE external_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ftx_date ON finance_transactions(posted_on DESC);
 
+-- ---------------------------------------------------------------- pipeline
+--
+-- Background work that produces data other work depends on.
+--
+-- The rules this schema exists to enforce, in order of how expensive they are
+-- to retrofit:
+--
+-- 1. **A node's inputs and outputs are declared, and the dependency graph is
+--    DERIVED from those declarations.** There is no second place listing "when
+--    A finishes, run B" — such a list inevitably drifts from what the code
+--    actually reads, and then work runs against data that is not there yet.
+--
+-- 2. **Artifacts are versioned and append-only.** Readiness is "every input I
+--    declared has a version newer than the one I last consumed", which is a
+--    question this table can answer directly. Overwriting in place would make
+--    staleness unknowable.
+--
+-- 3. **Reads are recorded, not just writes.** Without this, "did that run on
+--    stale input?" can only be answered by reading source code and guessing.
+--    With it, it is a join.
+--
+-- 4. **One row per runnable node, enforced by the database.** A SELECT that
+--    checks "is this already queued?" followed by an INSERT has a window
+--    between them. The partial unique index below closes it, so correctness
+--    does not depend on how many workers happen to be running.
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id          TEXT PRIMARY KEY,
+    reason      TEXT NOT NULL DEFAULT '',   -- who asked for this, in words
+    budget      INTEGER NOT NULL DEFAULT 50,
+    spent       INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'running',  -- running | done | exhausted | cancelled
+    started_at  TEXT NOT NULL,
+    ended_at    TEXT
+);
+
+-- Every artifact ever produced. Never updated, only appended: version N+1 is a
+-- new row, so "what did this consumer actually see?" stays answerable forever.
+CREATE TABLE IF NOT EXISTS pipeline_artifacts (
+    id          TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,              -- the declared contract name
+    version     INTEGER NOT NULL,
+    produced_by TEXT NOT NULL,              -- node id
+    run_id      TEXT REFERENCES pipeline_runs(id) ON DELETE SET NULL,
+    payload     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_kind_version
+    ON pipeline_artifacts(kind, version);
+CREATE INDEX IF NOT EXISTS idx_artifact_latest ON pipeline_artifacts(kind, version DESC);
+
+CREATE TABLE IF NOT EXISTS pipeline_tasks (
+    id            TEXT PRIMARY KEY,
+    run_id        TEXT REFERENCES pipeline_runs(id) ON DELETE CASCADE,
+    node_id       TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',  -- pending|running|done|failed|skipped
+    reason        TEXT NOT NULL DEFAULT '',   -- WHY this was admitted; never blank
+    attempt       INTEGER NOT NULL DEFAULT 1,
+    error         TEXT NOT NULL DEFAULT '',
+    started_at    TEXT,
+    ended_at      TEXT,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ptask_run ON pipeline_tasks(run_id, status);
+-- THE choke point. One live task per node, enforced here rather than by a
+-- check-then-insert in application code, so it holds under any concurrency.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ptask_live_unique
+    ON pipeline_tasks(node_id) WHERE status IN ('pending', 'running');
+
+-- What each task actually consumed. The reason "did this run on stale data?"
+-- is a query here and not an archaeology exercise.
+CREATE TABLE IF NOT EXISTS pipeline_reads (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL REFERENCES pipeline_tasks(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,
+    version     INTEGER,                    -- NULL = declared input was absent
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_preads_task ON pipeline_reads(task_id);
+
+-- Mail accounts. The secret is an app password (IMAP) — Gmail keeps those as
+-- the explicit exception to its OAuth mandate, and imaplib is stdlib, so this
+-- needs no dependency and no browser round trip.
+CREATE TABLE IF NOT EXISTS mail_accounts (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL DEFAULT 'Mail',
+    kind        TEXT NOT NULL DEFAULT 'imap',
+    host        TEXT NOT NULL DEFAULT 'imap.gmail.com',
+    port        INTEGER NOT NULL DEFAULT 993,
+    username    TEXT NOT NULL DEFAULT '',
+    secret      TEXT NOT NULL DEFAULT '',
+    folder      TEXT NOT NULL DEFAULT 'INBOX',
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    color       TEXT NOT NULL DEFAULT '',
+    last_sync   TEXT,
+    last_status TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
+-- ENVELOPES ONLY — no bodies, ever.
+--
+-- This panel hangs in a room other people walk through, and it is not a mail
+-- client. Storing subjects and senders is enough for every use here; storing
+-- bodies would multiply the blast radius of any compromise for no gain. Flags
+-- stay authoritative on the server, so `unread` here is a cached observation,
+-- not the truth.
+CREATE TABLE IF NOT EXISTS mail_messages (
+    id           TEXT PRIMARY KEY,
+    account_id   TEXT NOT NULL REFERENCES mail_accounts(id) ON DELETE CASCADE,
+    uid          TEXT NOT NULL,
+    message_id   TEXT NOT NULL DEFAULT '',
+    from_name    TEXT NOT NULL DEFAULT '',
+    from_addr    TEXT NOT NULL DEFAULT '',
+    subject      TEXT NOT NULL DEFAULT '',
+    snippet      TEXT NOT NULL DEFAULT '',
+    received_at  TEXT NOT NULL,
+    unread       BOOLEAN NOT NULL DEFAULT TRUE,
+    flagged      BOOLEAN NOT NULL DEFAULT FALSE,
+    to_me        BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at   TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mailmsg_uid ON mail_messages(account_id, uid);
+CREATE INDEX IF NOT EXISTS idx_mailmsg_recent ON mail_messages(received_at DESC);
+
 -- Wake-up routines: a time, some days, and a sequence to run on a device.
 --
 -- `last_fired` is a LOCAL DATE STRING, not a timestamp. The scheduler asks
@@ -362,7 +486,7 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def _dedupe_finance_items() -> None:
@@ -424,6 +548,10 @@ def init_db() -> None:
     if row["version"] < 8:
         # v8: alarms — created by SCHEMA above; only the version moves.
         q("UPDATE schema_version SET version = 8")
+    if row["version"] < 9:
+        # v9: pipeline (runs/artifacts/tasks/reads) + mail — all created by
+        # SCHEMA above; only the version moves.
+        q("UPDATE schema_version SET version = 9")
 
 
 # --------------------------------------------------------------------- events
@@ -1180,6 +1308,247 @@ def delete_alarm(aid: str) -> bool:
 def mark_alarm_fired(aid: str, day: str, result: str) -> None:
     q("UPDATE alarms SET last_fired = %s, last_result = %s WHERE id = %s",
       (day, result[:300], aid))
+
+
+# ---------------------------------------------------------------- pipeline
+
+def seconds_since(iso: str, now: float | None = None) -> float | None:
+    if not iso:
+        return None
+    try:
+        then = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    ref = now if now is not None else datetime.now(timezone.utc).timestamp()
+    return ref - then.timestamp()
+
+
+def create_pipeline_run(reason: str, budget: int = 50) -> dict:
+    rid = new_uid()
+    q("""INSERT INTO pipeline_runs (id, reason, budget, spent, status, started_at)
+         VALUES (%s,%s,%s,0,'running',%s)""",
+      (rid, reason[:200], int(budget), now_iso()))
+    return get_pipeline_run(rid)
+
+
+def get_pipeline_run(rid: str) -> dict | None:
+    return q("SELECT * FROM pipeline_runs WHERE id = %s", (rid,), fetch="one")
+
+
+def list_pipeline_runs(limit: int = 20) -> list[dict]:
+    return q("SELECT * FROM pipeline_runs ORDER BY started_at DESC LIMIT %s",
+             (limit,), fetch="all")
+
+
+def finish_pipeline_run(rid: str, status: str) -> None:
+    q("UPDATE pipeline_runs SET status = %s, ended_at = %s WHERE id = %s",
+      (status, now_iso(), rid))
+
+
+def spend_pipeline_budget(rid: str, cost: int) -> None:
+    q("UPDATE pipeline_runs SET spent = spent + %s WHERE id = %s", (int(cost), rid))
+
+
+def create_pipeline_task(run_id: str, node_id: str, reason: str) -> dict | None:
+    """Insert a task, or return None if one is already live for this node.
+
+    The partial unique index does the deciding, and catching its violation is
+    the entire point: a check-then-insert leaves a window where two callers both
+    see "nothing queued" and both insert.
+    """
+    tid = new_uid()
+    try:
+        q("""INSERT INTO pipeline_tasks (id, run_id, node_id, status, reason, created_at)
+             VALUES (%s,%s,%s,'pending',%s,%s)""",
+          (tid, run_id, node_id, reason[:300], now_iso()))
+    except psycopg.errors.UniqueViolation:
+        conn().rollback()
+        return None
+    except psycopg.Error:
+        conn().rollback()
+        raise
+    return get_pipeline_task(tid)
+
+
+def get_pipeline_task(tid: str) -> dict | None:
+    return q("SELECT * FROM pipeline_tasks WHERE id = %s", (tid,), fetch="one")
+
+
+def pipeline_live_task(node_id: str) -> dict | None:
+    return q("""SELECT * FROM pipeline_tasks
+                WHERE node_id = %s AND status IN ('pending','running') LIMIT 1""",
+             (node_id,), fetch="one")
+
+
+def pipeline_last_success(node_id: str) -> dict | None:
+    return q("""SELECT * FROM pipeline_tasks
+                WHERE node_id = %s AND status = 'done'
+                ORDER BY ended_at DESC LIMIT 1""", (node_id,), fetch="one")
+
+
+def start_pipeline_task(tid: str) -> None:
+    q("UPDATE pipeline_tasks SET status = 'running', started_at = %s WHERE id = %s",
+      (now_iso(), tid))
+
+
+def finish_pipeline_task(tid: str, status: str, error: str = "") -> None:
+    q("""UPDATE pipeline_tasks SET status = %s, error = %s, ended_at = %s
+         WHERE id = %s""", (status, (error or "")[:2000], now_iso(), tid))
+
+
+def list_pipeline_tasks(run_id: str) -> list[dict]:
+    return q("SELECT * FROM pipeline_tasks WHERE run_id = %s ORDER BY created_at",
+             (run_id,), fetch="all")
+
+
+def create_pipeline_artifact(kind: str, produced_by: str, run_id: str | None,
+                             payload: dict) -> dict:
+    """Append version N+1. Never updates in place — a consumer that recorded
+    version 3 must still be able to prove what version 3 contained."""
+    aid = new_uid()
+    nxt = q("SELECT COALESCE(MAX(version), 0) + 1 AS v FROM pipeline_artifacts WHERE kind = %s",
+            (kind,), fetch="one")["v"]
+    q("""INSERT INTO pipeline_artifacts (id, kind, version, produced_by, run_id,
+             payload, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+      (aid, kind, nxt, produced_by, run_id, Jsonb(payload or {}), now_iso()))
+    return q("SELECT * FROM pipeline_artifacts WHERE id = %s", (aid,), fetch="one")
+
+
+def pipeline_latest_artifact(kind: str) -> dict | None:
+    return q("""SELECT * FROM pipeline_artifacts WHERE kind = %s
+                ORDER BY version DESC LIMIT 1""", (kind,), fetch="one")
+
+
+def record_pipeline_read(task_id: str, kind: str, version: int | None) -> None:
+    q("""INSERT INTO pipeline_reads (id, task_id, kind, version, created_at)
+         VALUES (%s,%s,%s,%s,%s)""", (new_uid(), task_id, kind, version, now_iso()))
+
+
+def pipeline_input_watermark(node_id: str, kinds: list[str]) -> dict:
+    """Highest version of each kind that EXISTED when this node last succeeded.
+
+    Deliberately not "what it read". A node that declares an input and then
+    ignores it would otherwise have no recorded version, look permanently
+    stale, and re-run forever. The watermark answers "has anything appeared
+    since I last ran?", which is the actual readiness question.
+
+    The read log stays separate and serves a different purpose: proving what a
+    task really consumed, so staleness is auditable.
+    """
+    last = pipeline_last_success(node_id)
+    if not last or not kinds:
+        return {}
+    at = last.get("started_at") or last.get("created_at")
+    rows = q("""SELECT kind, MAX(version) AS version FROM pipeline_artifacts
+                WHERE kind = ANY(%s) AND created_at <= %s
+                GROUP BY kind""", (list(kinds), at), fetch="all")
+    return {r["kind"]: r["version"] for r in rows}
+
+
+def pipeline_ran_in_run(run_id: str, node_id: str) -> dict | None:
+    """Has this node already been attempted in this run? One shot per run."""
+    return q("""SELECT * FROM pipeline_tasks
+                WHERE run_id = %s AND node_id = %s
+                  AND status IN ('done','failed','skipped','running')
+                LIMIT 1""", (run_id, node_id), fetch="one")
+
+
+def pipeline_stale_reads(limit: int = 50) -> list[dict]:
+    """Tasks that consumed an input already superseded by the time they ran.
+
+    This is the query the reads table exists for. Without it, "did that run on
+    stale data?" can only be answered by reading source and inferring.
+    """
+    return q("""
+        SELECT t.node_id, t.id AS task_id, r.kind, r.version AS read_version,
+               a.version AS newest_at_the_time, t.started_at
+        FROM pipeline_reads r
+        JOIN pipeline_tasks t ON t.id = r.task_id
+        JOIN LATERAL (
+            SELECT MAX(version) AS version FROM pipeline_artifacts pa
+            WHERE pa.kind = r.kind AND pa.created_at <= COALESCE(t.started_at, t.created_at)
+        ) a ON TRUE
+        WHERE r.version IS NOT NULL AND a.version > r.version
+        ORDER BY t.started_at DESC LIMIT %s""", (limit,), fetch="all")
+
+
+# -------------------------------------------------------------------- mail
+
+MAIL_FIELDS = ("name", "kind", "host", "port", "username", "secret", "folder",
+               "enabled", "color")
+
+
+def list_mail_accounts() -> list[dict]:
+    return q("SELECT * FROM mail_accounts ORDER BY created_at", fetch="all")
+
+
+def get_mail_account(aid: str) -> dict | None:
+    return q("SELECT * FROM mail_accounts WHERE id = %s", (aid,), fetch="one")
+
+
+def create_mail_account(data: dict) -> dict:
+    aid = new_uid()
+    q("""INSERT INTO mail_accounts (id, name, kind, host, port, username, secret,
+             folder, enabled, color, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+      (aid, data.get("name") or "Mail", data.get("kind", "imap"),
+       data.get("host") or "imap.gmail.com", int(data.get("port") or 993),
+       data.get("username", "") or "", data.get("secret", "") or "",
+       data.get("folder") or "INBOX", bool(data.get("enabled", True)),
+       data.get("color", "") or "", now_iso()))
+    return get_mail_account(aid)
+
+
+def update_mail_account(aid: str, data: dict) -> dict | None:
+    sets, vals = [], []
+    for f in MAIL_FIELDS:
+        if f in data:
+            sets.append(f"{f} = %s")
+            vals.append(data[f])
+    if not sets:
+        return get_mail_account(aid)
+    vals.append(aid)
+    q(f"UPDATE mail_accounts SET {', '.join(sets)} WHERE id = %s", vals)
+    return get_mail_account(aid)
+
+
+def delete_mail_account(aid: str) -> bool:
+    return q("DELETE FROM mail_accounts WHERE id = %s", (aid,)) > 0
+
+
+def mark_mail_synced(aid: str, status: str) -> None:
+    q("UPDATE mail_accounts SET last_sync = %s, last_status = %s WHERE id = %s",
+      (now_iso(), status[:200], aid))
+
+
+def upsert_mail_message(data: dict) -> None:
+    q("""INSERT INTO mail_messages (id, account_id, uid, message_id, from_name,
+             from_addr, subject, snippet, received_at, unread, flagged, to_me, created_at)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+         ON CONFLICT (account_id, uid) DO UPDATE SET
+             unread = EXCLUDED.unread, flagged = EXCLUDED.flagged,
+             subject = EXCLUDED.subject, snippet = EXCLUDED.snippet""",
+      (new_uid(), data["account_id"], str(data["uid"]), data.get("message_id", "")[:300],
+       data.get("from_name", "")[:200], data.get("from_addr", "")[:200],
+       data.get("subject", "")[:400], data.get("snippet", "")[:400],
+       data["received_at"], bool(data.get("unread", True)),
+       bool(data.get("flagged")), bool(data.get("to_me")), now_iso()))
+
+
+def list_mail_messages(limit: int = 50, unread_only: bool = False) -> list[dict]:
+    sql = """SELECT m.*, a.name AS account_name, a.color AS account_color
+             FROM mail_messages m JOIN mail_accounts a ON a.id = m.account_id"""
+    if unread_only:
+        sql += " WHERE m.unread"
+    return q(sql + " ORDER BY m.received_at DESC LIMIT %s", (limit,), fetch="all")
+
+
+def prune_mail_messages(days: int = 30) -> int:
+    """Rolling window. This is an index for a wall panel, not an archive."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    return q("DELETE FROM mail_messages WHERE received_at < %s", (cutoff,))
 
 
 # ------------------------------------------------------------------ people

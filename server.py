@@ -30,6 +30,9 @@ import finance
 import gemini
 import hub
 import ics
+import mail as mail_client
+import pipeline
+import pipeline.nodes  # noqa: F401  (importing registers the nodes)
 import plaid
 import projection
 import providers
@@ -871,6 +874,104 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"series": store.finance_networth_series(days)})
 
 
+
+
+        # ---------------------------------------------------------------- mail
+        if path == "/api/mail":
+            if method == "GET":
+                return self._json(200, {
+                    "accounts": [{k: v for k, v in a.items() if k != "secret"}
+                                 for a in store.list_mail_accounts()],
+                    "summary": mail_client.summary(),
+                })
+            if method == "POST":
+                b = self._body()
+                if not (b.get("username") or "").strip():
+                    raise ApiError(400, "username is required")
+                a = store.create_mail_account({
+                    "name": (b.get("name") or "Mail")[:60],
+                    "host": (b.get("host") or "imap.gmail.com")[:120],
+                    "port": _int(b, "port", 1, 65535, 993),
+                    "username": (b.get("username") or "")[:200],
+                    "secret": (b.get("secret") or "")[:400],
+                    "folder": (b.get("folder") or "INBOX")[:120],
+                    "color": (b.get("color") or "")[:20],
+                })
+                hub.bus.publish("mail_changed", {})
+                return self._json(201, {"account": {k: v for k, v in a.items() if k != "secret"}})
+            raise ApiError(405, "method not allowed")
+
+        m = re.fullmatch(rf"/api/mail/accounts/{ID_RE}", path)
+        if m:
+            acct = store.get_mail_account(m.group(1))
+            if not acct:
+                raise ApiError(404, "account not found")
+            if method == "PATCH":
+                b = self._body()
+                data = {}
+                for f, cap in (("name", 60), ("host", 120), ("username", 200),
+                               ("folder", 120), ("color", 20)):
+                    if f in b:
+                        data[f] = str(b[f] or "")[:cap]
+                # An empty secret means "leave it alone", never "clear it" —
+                # the UI cannot show it back, so a blank field is not an edit.
+                if (b.get("secret") or "").strip():
+                    data["secret"] = str(b["secret"])[:400]
+                if "port" in b:
+                    data["port"] = _int(b, "port", 1, 65535, 993)
+                if "enabled" in b:
+                    data["enabled"] = bool(b["enabled"])
+                a = store.update_mail_account(acct["id"], data)
+                hub.bus.publish("mail_changed", {})
+                return self._json(200, {"account": {k: v for k, v in a.items() if k != "secret"}})
+            if method == "DELETE":
+                store.delete_mail_account(acct["id"])
+                hub.bus.publish("mail_changed", {})
+                return self._json(200, {"ok": True})
+            raise ApiError(405, "method not allowed")
+
+        m = re.fullmatch(rf"/api/mail/accounts/{ID_RE}/check", path)
+        if m and method == "POST":
+            acct = store.get_mail_account(m.group(1))
+            if not acct:
+                raise ApiError(404, "account not found")
+            try:
+                return self._json(200, mail_client.check(acct))
+            except mail_client.MailError as e:
+                raise ApiError(400, str(e))
+
+        if path == "/api/mail/messages" and method == "GET":
+            try:
+                limit = min(int((qs.get("limit") or ["40"])[0] or 40), 200)
+            except ValueError:
+                limit = 40
+            unread = (qs.get("unread") or ["0"])[0] in ("1", "true", "yes")
+            return self._json(200, {"messages": store.list_mail_messages(limit, unread)})
+
+        # ------------------------------------------------------------ pipeline
+        if path == "/api/pipeline" and method == "GET":
+            return self._json(200, {
+                "graph": pipeline.contracts.describe(),
+                "readiness": [vars(pipeline.engine.evaluate(n.id))
+                              for n in pipeline.contracts.all_nodes()],
+                "runs": store.list_pipeline_runs(10),
+            })
+
+        if path == "/api/pipeline/run" and method == "POST":
+            reason = str(self._body().get("reason") or "manual").strip()[:200]
+            run = pipeline.engine.start_run(f"manual: {reason}")
+            return self._json(200, pipeline.engine.tick(run["id"]))
+
+        m = re.fullmatch(rf"/api/pipeline/runs/{ID_RE}", path)
+        if m and method == "GET":
+            run = store.get_pipeline_run(m.group(1))
+            if not run:
+                raise ApiError(404, "run not found")
+            return self._json(200, {"run": run, "tasks": store.list_pipeline_tasks(run["id"])})
+
+        if path == "/api/pipeline/stale-reads" and method == "GET":
+            # The question the read log exists to answer.
+            return self._json(200, {"stale": store.pipeline_stale_reads(50)})
 
         # ----------------------------------------------------------------- ai
         if path == "/api/ai" and method == "GET":

@@ -232,6 +232,30 @@ def _presence_loop(stop: threading.Event) -> None:
         stop.wait(PRESENCE_INTERVAL)
 
 
+PIPELINE_INTERVAL = 300.0
+
+
+def _pipeline_loop(stop: threading.Event) -> None:
+    """Ask the graph what is ready, on a clock.
+
+    The clock is not the schedule — it only asks the question. What actually
+    runs, and in what order, is decided entirely by whether each node's declared
+    inputs are present and newer than what it last saw.
+    """
+    import pipeline
+    import pipeline.nodes  # noqa: F401
+    stop.wait(45)
+    while not stop.is_set():
+        try:
+            if pipeline.engine.runnable():
+                run = pipeline.engine.start_run("scheduled sweep")
+                pipeline.engine.tick(run["id"])
+                bus.publish("mail_changed", {})
+        except Exception:
+            pass
+        stop.wait(PIPELINE_INTERVAL)
+
+
 def _alarm_loop(stop: threading.Event) -> None:
     import alarms
     alarms.loop(stop, bus)
@@ -284,7 +308,8 @@ def start() -> None:
                      (_feed_loop, "feed-sync"),
                      (_presence_loop, "presence"),
                      (_finance_loop, "finance-sync"),
-                     (_alarm_loop, "alarms")):
+                     (_alarm_loop, "alarms"),
+                     (_pipeline_loop, "pipeline")):
         t = threading.Thread(target=fn, args=(_stop,), name=name, daemon=True)
         t.start()
         _threads.append(t)

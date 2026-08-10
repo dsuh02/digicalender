@@ -101,6 +101,20 @@ export const api = {
   updateFinanceAccount: (id, d) => req(`/api/finance/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.account),
   deleteFinanceAccount: id => req(`/api/finance/accounts/${id}`, { method: 'DELETE' }),
 
+  // mail
+  mail: () => req('/api/mail'),
+  createMailAccount: d => req('/api/mail', { method: 'POST', body: JSON.stringify(d) }).then(r => r.account),
+  updateMailAccount: (id, d) => req(`/api/mail/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.account),
+  deleteMailAccount: id => req(`/api/mail/accounts/${id}`, { method: 'DELETE' }),
+  checkMailAccount: id => req(`/api/mail/accounts/${id}/check`, { method: 'POST' }),
+  mailMessages: (limit = 40, unread = false) =>
+    req(`/api/mail/messages?limit=${limit}${unread ? '&unread=1' : ''}`).then(r => r.messages),
+
+  // pipeline
+  pipelineState: () => req('/api/pipeline'),
+  runPipeline: reason => req('/api/pipeline/run', {
+    method: 'POST', body: JSON.stringify({ reason }) }),
+
   // ai
   ai: () => req('/api/ai'),
   aiTest: () => req('/api/ai/test', { method: 'POST' }),

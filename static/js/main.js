@@ -714,7 +714,8 @@ async function openSettings(initialTab = 'Theme') {
   const views = { Theme: renderThemeTab, People: renderPeople,
                   Calendars: renderCalendars, Money: renderMoney,
                   Galleries: renderGalleries, Devices: renderDevices,
-                  Alarms: renderAlarms, AI: renderAI, Display: renderDisplay };
+                  Alarms: renderAlarms, Mail: renderMail, AI: renderAI,
+                  Display: renderDisplay };
   let active = views[initialTab] ? initialTab : 'Theme';
   const paint = async () => {
     clear(tabs);
@@ -1706,6 +1707,171 @@ async function renderAI() {
     }),
   );
   return wrap;
+}
+
+
+/* -------------------------------------------------------------------- mail */
+
+/**
+ * Mail accounts over IMAP.
+ *
+ * Gmail needs an **App Password**, not the account password — 2-Step
+ * Verification must be on, and IMAP enabled in Gmail's settings. The API route
+ * was rejected deliberately: Google's device-code flow supports no Gmail scope,
+ * so it would need a browser round trip AND an OAuth app whose refresh tokens
+ * expire weekly unless it passes restricted-scope verification.
+ *
+ * Only envelopes are ever fetched — sender, subject, date, flags. No bodies.
+ */
+async function renderMail() {
+  const wrap = el('div');
+  let data;
+  try { data = await api.mail(); } catch (e) { return el('p.sheet-note', { text: e.message }); }
+
+  const sum = data.summary || {};
+  wrap.append(el('h3.form-section', { text: 'Accounts' }));
+  if (!data.accounts.length) {
+    wrap.append(el('p.sheet-note', {
+      text: 'No mail accounts yet. For Gmail: turn on 2-Step Verification, create an App Password, and use that below.',
+    }));
+  } else {
+    wrap.append(el('p.sheet-note', {
+      text: `${sum.unread || 0} unread (${sum.unread_to_me || 0} addressed to you) across ${sum.total_indexed || 0} indexed messages.`,
+    }));
+  }
+
+  const list = el('div.dev-list');
+  for (const a of data.accounts) {
+    list.append(el('div.dev-row', {}, [
+      el('span.src-dot', { style: a.color ? { background: a.color } : {} }),
+      el('div.dev-main', {}, [
+        el('div.dev-name', { text: `${a.name}${a.enabled ? '' : '  (off)'}` }),
+        el('div.dev-meta', { text: `${a.username} · ${a.host}:${a.port} · ${a.folder}` }),
+        el('div.dev-meta', { text: a.last_status || 'never synced' }),
+      ]),
+      el('button.btn.btn-small', {
+        text: 'Test', onclick: async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true; btn.textContent = 'Checking…';
+          try {
+            const r = await api.checkMailAccount(a.id);
+            toast(`${r.folder}: ${r.total} messages, ${r.unread} unread`);
+          } catch (err) { toast(err.message, true); }
+          btn.disabled = false; btn.textContent = 'Test';
+        },
+      }),
+      el('button.btn.btn-small', { text: 'Edit', onclick: () => editMailAccount(a) }),
+    ]));
+  }
+  wrap.append(list);
+
+  wrap.append(el('div.dev-actions', {}, [
+    el('button.btn.btn-primary', {
+      text: '+ Add account',
+      onclick: () => editMailAccount({
+        name: 'Personal', host: 'imap.gmail.com', port: 993,
+        username: '', folder: 'INBOX', enabled: true,
+      }),
+    }),
+    el('button.btn', {
+      text: 'Sync now', onclick: async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true; btn.textContent = 'Syncing…';
+        try {
+          const r = await api.runPipeline('mail sync from settings');
+          const ran = (r.ran || []).map(x => `${x.node}: ${x.ok ? 'ok' : x.error}`).join(' · ');
+          toast(ran || 'nothing was ready to run');
+        } catch (err) { toast(err.message, true); }
+        btn.disabled = false; btn.textContent = 'Sync now';
+        openSettings('Mail');
+      },
+    }),
+  ]));
+
+  wrap.append(el('p.sheet-note', {
+    text: 'Envelopes only — sender, subject and date. Message bodies are never fetched or stored, and the mailbox is opened read-only so nothing here can mark mail as read.',
+  }));
+  return wrap;
+}
+
+async function editMailAccount(acct) {
+  const isNew = !acct.id;
+  const body = el('div');
+  const name = el('input.input', { type: 'text', value: acct.name || '' });
+  const host = el('input.input', { type: 'text', value: acct.host || 'imap.gmail.com' });
+  const port = el('input.input', { type: 'number', value: acct.port || 993 });
+  const user = el('input.input', { type: 'text', value: acct.username || '',
+                                   placeholder: 'you@gmail.com' });
+  const secret = el('input.input', {
+    type: 'password',
+    placeholder: isNew ? 'App Password (16 characters)' : 'leave blank to keep the current one',
+  });
+  const folder = el('input.input', { type: 'text', value: acct.folder || 'INBOX' });
+  const enabled = el('input.switch-input', { type: 'checkbox' });
+  enabled.checked = acct.enabled !== false;
+
+  body.append(
+    el('label.field', {}, [el('span.field-label', { text: 'Name' }), name]),
+    el('label.field', {}, [el('span.field-label', { text: 'Email address' }), user]),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'App Password' }), secret,
+      el('span.field-help', {
+        text: 'Google Account → Security → 2-Step Verification → App passwords. Spaces are ignored, so paste it exactly as shown.',
+      }),
+    ]),
+    el('label.field', {}, [el('span.field-label', { text: 'IMAP server' }), host]),
+    el('label.field', {}, [el('span.field-label', { text: 'Port' }), port]),
+    el('label.field', {}, [
+      el('span.field-label', { text: 'Folder' }), folder,
+      el('span.field-help', { text: 'INBOX for Gmail. Labels work too, e.g. [Gmail]/Important.' }),
+    ]),
+    el('label.row-toggle', {}, [
+      el('span.field-label', { text: 'Enabled' }), enabled, el('span.switch'),
+    ]),
+  );
+
+  const collect = () => {
+    const d = {
+      name: name.value.trim() || 'Mail',
+      host: host.value.trim() || 'imap.gmail.com',
+      port: Number(port.value) || 993,
+      username: user.value.trim(),
+      folder: folder.value.trim() || 'INBOX',
+      enabled: enabled.checked,
+    };
+    // Blank means "unchanged", never "erase" — the field cannot show the
+    // stored value back, so an empty box is not an edit.
+    if (secret.value.trim()) d.secret = secret.value.trim();
+    return d;
+  };
+
+  const actions = [
+    { label: 'Cancel', onClick: close },
+    {
+      label: 'Save', kind: 'primary', onClick: async () => {
+        try {
+          if (isNew) await api.createMailAccount(collect());
+          else await api.updateMailAccount(acct.id, collect());
+          close();
+          openSettings('Mail');
+        } catch (e) { toast(e.message, true); }
+      },
+    },
+  ];
+  if (!isNew) {
+    actions.unshift({
+      label: 'Delete', onClick: () => {
+        close();
+        confirmSheet('Remove this account?',
+          `“${acct.name}” and its indexed messages will be removed from the panel. Nothing changes in the mailbox itself.`,
+          async () => {
+            try { await api.deleteMailAccount(acct.id); } catch (e) { toast(e.message, true); }
+            openSettings('Mail');
+          });
+      },
+    });
+  }
+  openSheet({ title: isNew ? 'Add mail account' : 'Edit mail account', body, actions });
 }
 
 async function renderGalleries() {

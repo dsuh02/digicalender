@@ -78,6 +78,12 @@ def _received_at(msg) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _quote(folder: str) -> str:
+    """IMAP mailbox names need quoting once labels contain spaces or brackets
+    (e.g. "[Gmail]/All Mail"), and quoting a plain INBOX is harmless."""
+    return '"%s"' % (folder or "INBOX").replace('"', '')
+
+
 def _connect(account: dict) -> imaplib.IMAP4_SSL:
     host = account.get("host") or "imap.gmail.com"
     port = int(account.get("port") or 993)
@@ -103,18 +109,29 @@ def _connect(account: dict) -> imaplib.IMAP4_SSL:
     return conn
 
 
+def _status_counts(conn, folder: str) -> tuple[int, int]:
+    """(total, unread) via STATUS.
+
+    STATUS returns COUNTS. SEARCH returns every matching id on one line, and
+    imaplib refuses a line over 1 MB — which a real mailbox exceeds easily. Ask
+    for the number when the number is what you want.
+    """
+    typ, data = conn.status(_quote(folder), "(MESSAGES UNSEEN)")
+    if typ != "OK" or not data:
+        raise MailError(f"cannot read folder {folder!r}")
+    raw = data[0].decode("utf-8", "replace") if isinstance(data[0], bytes) else str(data[0])
+    total = int((re.search(r"MESSAGES\s+(\d+)", raw) or [0, 0])[1])
+    unread = int((re.search(r"UNSEEN\s+(\d+)", raw) or [0, 0])[1])
+    return total, unread
+
+
 def check(account: dict) -> dict:
     """Prove the credentials and folder work, without storing anything."""
     conn = _connect(account)
     try:
         folder = account.get("folder") or "INBOX"
-        typ, data = conn.select(f'"{folder}"', readonly=True)
-        if typ != "OK":
-            raise MailError(f"cannot open folder {folder!r}")
-        total = int(data[0] or 0)
-        typ, unseen = conn.search(None, "UNSEEN")
-        n_unseen = len(unseen[0].split()) if typ == "OK" and unseen and unseen[0] else 0
-        return {"ok": True, "folder": folder, "total": total, "unread": n_unseen}
+        total, unread = _status_counts(conn, folder)
+        return {"ok": True, "folder": folder, "total": total, "unread": unread}
     finally:
         try:
             conn.logout()
@@ -123,42 +140,59 @@ def check(account: dict) -> dict:
 
 
 def fetch(account: dict, limit: int = DEFAULT_FETCH) -> dict:
-    """Newest `limit` envelopes from one account into the local index."""
+    """Newest `limit` envelopes from one account into the local index.
+
+    Addressed by SEQUENCE RANGE, not by searching. `SELECT` already reports how
+    many messages exist, so the newest N are simply the last N sequence numbers
+    — no need to ask the server to list every id in the mailbox first. That
+    earlier approach broke on any real inbox: SEARCH ALL returns every id on one
+    line and imaplib caps a line at 1 MB.
+
+    One FETCH for the whole range, rather than one per message: 60 round trips
+    became 1.
+    """
     conn = _connect(account)
     stored = 0
     unread = 0
     try:
         folder = account.get("folder") or "INBOX"
-        typ, _ = conn.select(f'"{folder}"', readonly=True)
+        typ, data = conn.select(_quote(folder), readonly=True)
         if typ != "OK":
-            raise MailError(f"cannot open folder {folder!r}")
+            detail = (data[0].decode("utf-8", "replace")
+                      if data and isinstance(data[0], bytes) else "")
+            raise MailError(f"cannot open folder {folder!r}"
+                            + (f" — {detail}" if detail else ""))
 
-        typ, data = conn.search(None, "ALL")
-        if typ != "OK":
-            raise MailError("search failed")
-        uids = (data[0] or b"").split()
-        if not uids:
-            return {"ok": True, "stored": 0, "unread": 0}
-        uids = uids[-int(limit):]
+        total = int(data[0] or 0)
+        if total <= 0:
+            return {"ok": True, "stored": 0, "unread": 0, "total": 0}
 
+        want = max(1, int(limit))
+        lo = max(1, total - want + 1)
         me = (account.get("username") or "").lower()
-        # Headers only. BODY.PEEK never sets \\Seen — BODY would.
-        spec = "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID TO CC)])"
-        for uid in reversed(uids):
-            typ, parts = conn.fetch(uid, spec)
-            if typ != "OK" or not parts:
+
+        # UID so rows have a stable key; BODY.PEEK so nothing is marked read.
+        spec = "(UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID TO CC)])"
+        typ, parts = conn.fetch(f"{lo}:{total}", spec)
+        if typ != "OK":
+            raise MailError("fetch failed")
+
+        for part in parts or []:
+            # Each message arrives as a tuple: (metadata line, raw headers).
+            # Bare bytes between them are the closing ")" and carry nothing.
+            if not isinstance(part, tuple) or len(part) < 2:
                 continue
-            raw, flags = b"", ""
-            for part in parts:
-                if isinstance(part, tuple):
-                    raw = part[1]
-                    flags = part[0].decode("utf-8", "replace")
-                elif isinstance(part, bytes):
-                    flags += part.decode("utf-8", "replace")
+            meta = part[0].decode("utf-8", "replace") if isinstance(part[0], bytes) else str(part[0])
+            raw = part[1]
             if not raw:
                 continue
-            msg = email.message_from_bytes(raw)
 
+            uid_m = re.search(r"UID\s+(\d+)", meta)
+            if not uid_m:
+                continue                     # without a stable key, skip it
+            flags = (re.search(r"FLAGS\s+\(([^)]*)\)", meta) or ["", ""])[1]
+
+            msg = email.message_from_bytes(raw)
             name, addr = email.utils.parseaddr(_decode(msg.get("From")))
             recipients = f"{_decode(msg.get('To'))} {_decode(msg.get('Cc'))}".lower()
             is_unread = "\\Seen" not in flags
@@ -166,7 +200,7 @@ def fetch(account: dict, limit: int = DEFAULT_FETCH) -> dict:
 
             store.upsert_mail_message({
                 "account_id": account["id"],
-                "uid": uid.decode() if isinstance(uid, bytes) else str(uid),
+                "uid": uid_m.group(1),
                 "message_id": _decode(msg.get("Message-ID")),
                 "from_name": name or addr,
                 "from_addr": addr,
@@ -178,14 +212,14 @@ def fetch(account: dict, limit: int = DEFAULT_FETCH) -> dict:
                 "received_at": _received_at(msg),
                 "unread": is_unread,
                 "flagged": "\\Flagged" in flags,
-                # Addressed to you directly, rather than a list you are on —
-                # the cheapest useful signal for "this probably wants a reply".
+                # Addressed to you directly rather than a list you are on — the
+                # cheapest useful signal for "this probably wants a reply".
                 "to_me": bool(me and me in recipients),
             })
             stored += 1
             if is_unread:
                 unread += 1
-        return {"ok": True, "stored": stored, "unread": unread}
+        return {"ok": True, "stored": stored, "unread": unread, "total": total}
     finally:
         try:
             conn.logout()

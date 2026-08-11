@@ -893,7 +893,10 @@ class Handler(BaseHTTPRequestHandler):
                     "host": (b.get("host") or "imap.gmail.com")[:120],
                     "port": _int(b, "port", 1, 65535, 993),
                     "username": (b.get("username") or "")[:200],
-                    "secret": (b.get("secret") or "")[:400],
+                    # Google displays app passwords in groups of four; the
+                    # spaces are presentation, and storing them makes the length
+                    # look wrong to anyone debugging later.
+                    "secret": (b.get("secret") or "").replace(" ", "")[:400],
                     "folder": (b.get("folder") or "INBOX")[:120],
                     "color": (b.get("color") or "")[:20],
                 })
@@ -916,7 +919,7 @@ class Handler(BaseHTTPRequestHandler):
                 # An empty secret means "leave it alone", never "clear it" —
                 # the UI cannot show it back, so a blank field is not an edit.
                 if (b.get("secret") or "").strip():
-                    data["secret"] = str(b["secret"])[:400]
+                    data["secret"] = str(b["secret"]).replace(" ", "")[:400]
                 if "port" in b:
                     data["port"] = _int(b, "port", 1, 65535, 993)
                 if "enabled" in b:

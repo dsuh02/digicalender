@@ -295,11 +295,29 @@ def set_volume(percent: int, device_id: str | None = None) -> None:
     call("PUT", "/me/player/volume", None, params)
 
 
+def _playlist_page(offset: int, attempts: int = 3) -> dict:
+    """One page, retried when Spotify reports a total but returns nothing.
+
+    Observed live: /me/playlists intermittently answers 200 with `total: 113`
+    and `items: []`. Retrying fixes it. This is deliberately NOT a blanket
+    retry — it fires only on that specific self-contradictory response, so a
+    genuinely empty library still returns immediately instead of stalling.
+    """
+    page = {}
+    for i in range(attempts):
+        page = call("GET", "/me/playlists", None, {"limit": 50, "offset": offset})
+        items = page.get("items") or []
+        if items or not page.get("total"):
+            return page
+        time.sleep(0.6 * (i + 1))
+    return page
+
+
 def playlists(max_items: int = 400) -> list[dict]:
     """Every playlist in the library, in Spotify's own order."""
     out, offset = [], 0
     while offset < max_items:
-        page = call("GET", "/me/playlists", None, {"limit": 50, "offset": offset})
+        page = _playlist_page(offset)
         items = [p for p in (page.get("items") or []) if p]
         for p in items:
             owner = p.get("owner") or {}

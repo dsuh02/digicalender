@@ -183,6 +183,12 @@ def exchange_code(code: str) -> dict:
 
 def _store_access(d: dict) -> str:
     tok = d.get("access_token") or ""
+    # Spotify returns the GRANTED scopes on both exchange and refresh. Keeping
+    # them is the only way to notice that a stored token predates a scope the
+    # code now needs — otherwise the failure shows up much later as a bare
+    # "Insufficient client scope" from whichever feature needed it.
+    if d.get("scope"):
+        store.set_setting("spotify_scopes", d["scope"])
     # 60s of slack: a token that expires mid-request is the same as expired.
     exp = time.time() + max(0, int(d.get("expires_in") or 3600)) - 60
     store.set_setting("spotify_access_token", tok)
@@ -212,8 +218,35 @@ def token() -> str:
     return _store_access(d)
 
 
+def granted_scopes() -> list[str]:
+    return sorted((store.get_setting("spotify_scopes") or "").split())
+
+
+def missing_scopes() -> list[str]:
+    """Scopes the code needs that the stored token was never granted."""
+    if not connected():
+        return []
+    have = set(granted_scopes())
+    # An older token predates the setting entirely; treat unknown as "stale"
+    # rather than "fine", because silently assuming fine is how this hid.
+    if not have:
+        return list(SCOPES)
+    return [s for s in SCOPES if s not in have]
+
+
+SCOPE_PURPOSE = {
+    "user-read-recently-played": "ordering playlists by what you last played",
+    "user-top-read": "your top artists and tracks",
+    "user-library-read": "your saved tracks and albums",
+    "user-follow-read": "artists you follow",
+    "user-read-private": "knowing whether the account is Premium",
+    "playlist-read-collaborative": "collaborative playlists",
+}
+
+
 def disconnect() -> None:
-    for k in ("spotify_refresh_token", "spotify_access_token", "spotify_expires_at"):
+    for k in ("spotify_refresh_token", "spotify_access_token", "spotify_expires_at",
+              "spotify_scopes"):
         store.set_setting(k, "")
 
 

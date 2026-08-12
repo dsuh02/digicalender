@@ -966,6 +966,12 @@ body.wall .grid { gap: 4px; }
   background: var(--primary-soft); border-color: var(--primary); color: var(--text);
 }
 .warn-note { color: var(--warn); }
+.reauth { margin: 10px 0; }
+.reauth > summary { cursor: pointer; color: var(--text-3); font-size: 13px;
+                    padding: 6px 0; list-style: none; }
+.reauth > summary::-webkit-details-marker { display: none; }
+.reauth > summary::before { content: '\203A  '; }
+.reauth[open] > summary::before { content: '\2304  '; }
 
 .link-url {
   display: block; margin: 8px 0; padding: 10px 12px;

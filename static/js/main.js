@@ -1460,6 +1460,53 @@ async function editPerson(p) {
  * authorise wherever there is a keyboard, land on a 127.0.0.1 page that fails to
  * load, and paste that failed address back. Only its ?code= matters.
  */
+
+/**
+ * The authorise round trip, usable whether or not Spotify is already connected.
+ *
+ * It used to exist only in the disconnected branch, which meant adding a scope
+ * left no way to grant it without disconnecting first — the button simply was
+ * not there. Re-authorising is a normal thing to need, not a recovery step.
+ */
+function spotifyAuthorizeBlock(label) {
+  const wrap = el('div');
+  const paste = el('input.input', { type: 'text', placeholder: 'Paste the address you were sent to' });
+  const linkBox = el('div');
+  wrap.append(
+    el('div.dev-actions', {}, [
+      el('button.btn.btn-primary', {
+        text: label, onclick: async (e) => {
+          e.preventDefault();
+          try {
+            const url = await api.spotifyAuthorize();
+            clear(linkBox);
+            linkBox.append(
+              el('div.field-help', {
+                text: 'Open this on a phone or laptop and approve. You will land on a 127.0.0.1 page that fails to load — that is expected. Copy its whole address and paste it below.',
+              }),
+              el('a.link-url', { href: url, target: '_blank', rel: 'noreferrer', text: url }),
+            );
+          } catch (err) { toast(err.message, true); }
+        },
+      }),
+    ]),
+    linkBox,
+    el('label.field', {}, [el('span.field-label', { text: 'Redirected address' }), paste]),
+    el('div.dev-actions', {}, [
+      el('button.btn', {
+        text: 'Finish connecting', onclick: async () => {
+          try {
+            await api.spotifyComplete(paste.value);
+            toast('Spotify connected');
+            openSettings('Alarms');
+          } catch (e) { toast(e.message, true); }
+        },
+      }),
+    ]),
+  );
+  return wrap;
+}
+
 async function renderAlarms() {
   const wrap = el('div');
   let sp = null;
@@ -1523,6 +1570,22 @@ async function renderAlarms() {
         text: 'No Spotify Connect devices are awake right now. Open Spotify on the Roku once so it registers, then reopen this tab to see its name.',
       }));
     }
+    // Scopes grow as features are added, and a token only ever carries the
+    // ones granted when it was issued. Saying which are missing — and what each
+    // one is for — turns a later "Insufficient client scope" from a mystery
+    // into a sentence.
+    if ((sp.missing_scopes || []).length) {
+      wrap.append(el('p.sheet-note.warn-note', {
+        text: `Re-authorise to enable: ${sp.missing_scopes.map(m => m.purpose).join(', ')}.`,
+      }));
+      wrap.append(spotifyAuthorizeBlock('Re-authorise Spotify'));
+    } else {
+      wrap.append(el('details.reauth', {}, [
+        el('summary', { text: 'Re-authorise Spotify' }),
+        spotifyAuthorizeBlock('Start re-authorisation'),
+      ]));
+    }
+
     wrap.append(el('div.dev-actions', {}, [
       el('button.btn.btn-small', {
         text: 'Disconnect', onclick: async () => {
@@ -1532,37 +1595,7 @@ async function renderAlarms() {
       }),
     ]));
   } else if (sp && sp.configured) {
-    const paste = el('input.input', { type: 'text', placeholder: 'Paste the address you were sent to' });
-    const linkBox = el('div');
-    wrap.append(
-      el('div.dev-actions', {}, [
-        el('button.btn.btn-primary', {
-          text: 'Authorise Spotify', onclick: async (e) => {
-            e.preventDefault();
-            try {
-              const url = await api.spotifyAuthorize();
-              clear(linkBox);
-              linkBox.append(
-                el('div.field-help', {
-                  text: 'Open this on a phone or laptop and approve. You will land on a 127.0.0.1 page that fails to load — that is expected. Copy its whole address and paste it below.',
-                }),
-                el('a.link-url', { href: url, target: '_blank', rel: 'noreferrer', text: url }),
-              );
-            } catch (err) { toast(err.message, true); }
-          },
-        }),
-      ]),
-      linkBox,
-      el('label.field', {}, [el('span.field-label', { text: 'Redirected address' }), paste]),
-      el('div.dev-actions', {}, [
-        el('button.btn', {
-          text: 'Finish connecting', onclick: async () => {
-            try { await api.spotifyComplete(paste.value); toast('Spotify connected'); openSettings('Alarms'); }
-            catch (e) { toast(e.message, true); }
-          },
-        }),
-      ]),
-    );
+    wrap.append(spotifyAuthorizeBlock('Authorise Spotify'));
   }
 
   /* --- the alarms themselves --- */

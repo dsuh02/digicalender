@@ -1011,9 +1011,15 @@ class Handler(BaseHTTPRequestHandler):
 
         # ------------------------------------------------------------ spotify
         if path == "/api/spotify" and method == "GET":
+            missing = spotify_api.missing_scopes()
             out = {"configured": spotify_api.configured(),
                    "connected": spotify_api.connected(),
-                   "redirect_uri": spotify_api.REDIRECT_URI, "user": None, "devices": []}
+                   "redirect_uri": spotify_api.REDIRECT_URI, "user": None, "devices": [],
+                   "missing_scopes": [
+                       {"scope": sc,
+                        "purpose": spotify_api.SCOPE_PURPOSE.get(sc, sc)}
+                       for sc in missing],
+                   "granted_scopes": spotify_api.granted_scopes()}
             if out["connected"]:
                 try:
                     me = spotify_api.me()

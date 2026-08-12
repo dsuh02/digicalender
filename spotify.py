@@ -230,10 +230,21 @@ def call(method: str, path: str, body: dict | None = None, params: dict | None =
             code = (err.get("reason") or "") if isinstance(err, dict) else ""
         except Exception:
             pass
+        # These hints are only true of the PLAYER endpoints. Applied blanket
+        # they actively mislead: a 403 from /audio-features (deprecated for apps
+        # created after Nov 2024) was being reported as "needs Premium", which
+        # sends you chasing a subscription problem that does not exist, and a
+        # 404 from /recommendations as "no active device".
+        is_player = path.startswith("/me/player")
         if e.code == 403 and not detail:
-            detail = "Spotify refused the command — playback control needs Premium"
+            detail = ("Spotify refused the command — playback control needs Premium"
+                      if is_player else
+                      "Spotify refused this endpoint for this app — several catalogue "
+                      "endpoints (audio-features, audio-analysis, recommendations, "
+                      "browse) are unavailable to apps created after November 2024")
         if e.code == 404 and not detail:
-            detail = "No active Spotify device, or that content is not playable by apps"
+            detail = ("No active Spotify device" if is_player else
+                      "Not found, or not available to third-party apps")
         raise SpotifyError(detail or f"Spotify returned {e.code}", e.code, code)
     except (urllib.error.URLError, OSError) as e:
         raise SpotifyError(f"Could not reach Spotify: {e}", 0)

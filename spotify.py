@@ -427,12 +427,26 @@ def library(max_items: int = 400) -> dict:
         recent, have_recency = [], False
 
     rank = {uri: i for i, uri in enumerate(recent)}
-    # Played ones first in recency order; everything else keeps Spotify's order
-    # behind them, rather than being sorted arbitrarily.
-    items.sort(key=lambda p: (rank.get(p["uri"], len(rank)),))
+    matched = sum(1 for p in items if p["uri"] in rank)
+
+    # Recently played first, then ALPHABETICAL — not Spotify's own order, which
+    # is arbitrary from the outside and useless for finding one playlist among a
+    # hundred. Recency only helps if the history actually contains library
+    # playlists; a history made entirely of Spotify-owned mixes (DJ, Daily Mix)
+    # matches nothing, so alphabetical is what the list falls back to.
+    items.sort(key=lambda p: (rank.get(p["uri"], len(rank)), p["name"].lower()))
     for p in items:
         p["recent_rank"] = rank.get(p["uri"])
-    return {"playlists": items, "recency": have_recency, "count": len(items)}
+    return {
+        "playlists": items,
+        "count": len(items),
+        # `recency` said only whether the CALL worked, which read as "ordered by
+        # recency" even when nothing was reordered. What matters is how many
+        # actually matched.
+        "recency": have_recency,
+        "recency_matched": matched,
+        "recent_contexts": len(recent),
+    }
 
 
 def code_url(uri: str) -> str:

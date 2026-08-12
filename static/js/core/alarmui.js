@@ -131,6 +131,14 @@ export async function openAlarmEditor(alarm, data, onSaved) {
      anything not already in the library. */
   const mine = el('div.pl-list');
   const mineNote = el('div.field-help', { text: 'Loading your playlists…' });
+  // With a hundred-odd playlists, filtering is what actually finds one.
+  const mineFilter = el('input.input', { type: 'text', placeholder: 'Filter your playlists…' });
+  mineFilter.addEventListener('input', () => {
+    const q = mineFilter.value.trim().toLowerCase();
+    mine.querySelectorAll('.pl-row').forEach(r => {
+      r.hidden = !!q && !(r.dataset.name || '').includes(q);
+    });
+  });
 
   const markChosen = () => {
     const cur = uri.value.trim();
@@ -143,12 +151,18 @@ export async function openAlarmEditor(alarm, data, onSaved) {
     try {
       const lib = await api.spotifyPlaylists();
       clear(mine);
-      mineNote.textContent = lib.recency
-        ? `${lib.count} playlists, most recently played first.`
-        : `${lib.count} playlists, in Spotify's own order — re-authorise to sort by what you actually play.`;
+      // Say what the ordering ACTUALLY is. Claiming "most recently played
+      // first" while nothing was reordered is worse than saying nothing.
+      if (!lib.recency) {
+        mineNote.textContent = `${lib.count} playlists, A–Z — re-authorise to sort by what you last played.`;
+      } else if (lib.recency_matched > 0) {
+        mineNote.textContent = `${lib.count} playlists — ${lib.recency_matched} recently played first, then A–Z.`;
+      } else {
+        mineNote.textContent = `${lib.count} playlists, A–Z. Nothing in your recent listening is a playlist from this library, so there is nothing to put first.`;
+      }
       lib.playlists.forEach((pl) => {
         const row = el('button.pl-row', {
-          type: 'button', dataset: { uri: pl.uri },
+          type: 'button', dataset: { uri: pl.uri, name: (pl.name || '').toLowerCase() },
           onclick: (e) => {
             e.preventDefault();
             uri.value = pl.uri;
@@ -226,6 +240,7 @@ export async function openAlarmEditor(alarm, data, onSaved) {
 
     el('h3.form-section', { text: 'What to play' }),
     mineNote,
+    mineFilter,
     mine,
     el('label.field', {}, [
       el('span.field-label', { text: 'Spotify link or URI' }), uri,

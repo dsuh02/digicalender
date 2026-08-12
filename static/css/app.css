@@ -955,6 +955,23 @@ body.wall .grid { gap: 4px; }
 .queue-len { flex: none; font-size: calc(11px * var(--ui-scale)); color: var(--text-3);
              font-variant-numeric: tabular-nums; }
 
+/* Lyrics: the current line is the only one at full strength. Everything else
+   recedes, so the eye lands on the right place without hunting. */
+.lyr { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.lyr-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; touch-action: pan-y;
+            padding: 12% 0; scroll-behavior: smooth; }
+.lyr-line {
+  font-size: calc(17px * var(--ui-scale)); line-height: 1.45;
+  padding: calc(3px * var(--ui-scale)) 0;
+  color: var(--text-3); opacity: .55;
+  transition: color .25s ease, opacity .25s ease, font-weight .25s ease;
+}
+.lyr-line.past { opacity: .3; }
+.lyr-line.now { color: var(--text); opacity: 1; font-weight: 600; }
+.lyr-plain { flex: 1 1 auto; min-height: 0; overflow-y: auto; touch-action: pan-y;
+             white-space: pre-wrap; font-size: calc(14px * var(--ui-scale));
+             color: var(--text-2); line-height: 1.5; }
+
 .pl-list {
   display: flex; flex-direction: column; gap: 2px;
   max-height: 34vh; overflow-y: auto; margin: 6px 0 10px;

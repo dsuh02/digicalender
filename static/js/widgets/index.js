@@ -8,7 +8,7 @@ import { GalleryWidget } from './gallery.js';
 import { CashflowWidget, CreditWidget, NetWorthChartWidget, SpendingWidget } from './insights.js';
 import { DeviceGridWidget, MediaWidget, RokuRemoteWidget, ScenesWidget } from './home.js';
 import { ClockWidget, LabelWidget, WeatherWidget } from './info.js';
-import { NowPlayingWidget, TopMusicWidget, UpNextWidget } from './music.js';
+import { LyricsWidget, NowPlayingWidget, TopMusicWidget, UpNextWidget } from './music.js';
 import { GreetingWidget, PeopleWidget } from './people.js';
 import { ProjectionWidget } from './projection.js';
 import { NotificationsWidget, TodoWidget } from './tasks.js';
@@ -20,7 +20,7 @@ export const WIDGETS = [
   NetWorthWidget, NetWorthChartWidget, AccountsWidget, BillsWidget,
   SpendingWidget, CashflowWidget, CreditWidget, ProjectionWidget,
   DeviceGridWidget, ScenesWidget, RokuRemoteWidget, MediaWidget, AlarmsWidget,
-  NowPlayingWidget, UpNextWidget, TopMusicWidget,
+  NowPlayingWidget, UpNextWidget, TopMusicWidget, LyricsWidget,
 ];
 
 export const BY_TYPE = Object.fromEntries(WIDGETS.map(w => [w.type, w]));

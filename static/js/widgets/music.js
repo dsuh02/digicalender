@@ -328,3 +328,120 @@ export const TopMusicWidget = {
     return { refresh: load, destroy: off };
   },
 };
+
+/* ------------------------------------------------------------------ lyrics */
+
+export const LyricsWidget = {
+  type: 'lyrics', name: 'Lyrics', icon: 'text', category: 'Home',
+  defaultSize: { w: 14, h: 16 }, minSize: { w: 5, h: 5 },
+  settings: [
+    { key: 'context', label: 'Lines around the current one', type: 'slider',
+      min: 1, max: 8, default: 3 },
+    { key: 'center', label: 'Keep the current line centred', type: 'toggle', default: true },
+  ],
+
+  render(host, ctx) {
+    const body = el('div.lyr');
+    host.append(body);
+
+    let data = null;
+    let fetchedAt = 0;
+    let trackKey = '';
+    let poll = null;
+    let tick = null;
+    let lastIdx = -2;
+    let lineEls = [];
+
+    const load = async () => {
+      try {
+        const r = await api.lyricsNow();
+        const key = r.track ? `${r.track.name}|${r.track.artists.join(',')}` : '';
+        // Only rebuild the DOM when the SONG changes. Rebuilding every poll
+        // would fight the scroll and restart the animation four times a minute.
+        if (key !== trackKey) { trackKey = key; data = r; lastIdx = -2; draw(); }
+        else { data = { ...r, synced: data.synced, plain: data.plain, found: data.found }; }
+        fetchedAt = performance.now();
+      } catch (e) {
+        data = { error: e.message };
+        trackKey = '';
+        draw();
+      }
+    };
+
+    const position = () => {
+      if (!data || !data.track) return 0;
+      const base = data.progress_ms || 0;
+      if (!data.playing) return base;
+      return Math.min(data.track.duration_ms || 0, base + (performance.now() - fetchedAt));
+    };
+
+    /** Same binary search as the server's, for the same reason. */
+    const activeLine = (lines, ms) => {
+      let lo = 0, hi = lines.length - 1, found = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (lines[mid].ms <= ms) { found = mid; lo = mid + 1; } else { hi = mid - 1; }
+      }
+      return found;
+    };
+
+    const draw = () => {
+      clear(body);
+      lineEls = [];
+      if (!data || data.error) {
+        body.append(el('div.empty-hint', { text: (data && data.error) || 'No lyrics' }));
+        return;
+      }
+      if (!data.track) {
+        body.append(el('div.empty-hint', { text: 'Nothing playing' }));
+        return;
+      }
+      if (data.instrumental) {
+        body.append(el('div.empty-hint', { text: 'Instrumental' }));
+        return;
+      }
+      if (!data.found) {
+        body.append(el('div.empty-hint', {}, [
+          el('div', { text: 'No lyrics found' }),
+          el('div.field-help', { text: `Nobody has submitted ${data.track.name} to LRCLIB yet.` }),
+        ]));
+        return;
+      }
+      if (!data.synced.length) {
+        // Words but no timings — still worth showing, just not followable.
+        body.append(el('div.lyr-plain', { text: data.plain }));
+        return;
+      }
+      const list = el('div.lyr-list');
+      data.synced.forEach((l) => {
+        const node = el('div.lyr-line', { text: l.line || '♪' });
+        lineEls.push(node);
+        list.append(node);
+      });
+      body.append(list);
+    };
+
+    const paint = () => {
+      if (!data || !data.found || !lineEls.length) return;
+      const idx = activeLine(data.synced, position());
+      if (idx === lastIdx) return;
+      lastIdx = idx;
+      lineEls.forEach((n, i) => {
+        n.classList.toggle('now', i === idx);
+        n.classList.toggle('past', i < idx);
+      });
+      if (ctx.settings.center !== false && idx >= 0 && lineEls[idx]) {
+        lineEls[idx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    };
+
+    load();
+    poll = setInterval(load, 8000);
+    tick = setInterval(paint, 250);
+    const off = bus.on('spotify_changed', load);
+    return {
+      refresh: load,
+      destroy: () => { off(); clearInterval(poll); clearInterval(tick); },
+    };
+  },
+};

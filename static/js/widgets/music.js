@@ -11,6 +11,7 @@
  */
 
 import { api, bus } from '../core/api.js';
+import { artColor } from '../core/artcolor.js';
 import { icon } from '../core/icons.js';
 import { toast } from '../core/sheet.js';
 import { clear, el } from '../core/util.js';
@@ -125,8 +126,23 @@ export const NowPlayingWidget = {
         ]),
       );
 
+      const dev = data.device || {};
+      if (dev.name) {
+        info.append(el('div.np-device', {
+          text: `${dev.name}${dev.volume != null ? ` · ${dev.volume}%` : ''}`,
+        }));
+      }
+
+      body.append(info);
+
+      /* The footer: one flat bar tinted from the artwork's average colour, with
+         the controls and the scannable code sitting on it. Its ink is black or
+         white by contrast ratio rather than by taste, so a pale cover and a
+         dark one are both readable without anyone choosing. */
+      const footer = el('div.np-footer');
+
       if (ctx.settings.showControls !== false) {
-        info.append(el('div.np-controls', {}, [
+        footer.append(el('div.np-controls', {}, [
           el('button.np-btn', {
             type: 'button', 'aria-label': 'Previous',
             onclick: e => { e.stopPropagation(); send('previous'); },
@@ -146,19 +162,27 @@ export const NowPlayingWidget = {
         ]));
       }
 
-      const dev = data.device || {};
-      if (dev.name) {
-        info.append(el('div.np-device', {
-          text: `${dev.name}${dev.volume != null ? ` · ${dev.volume}%` : ''}`,
-        }));
-      }
-
-      body.append(info);
-
       // A Spotify Code, not a Jam link — Jam has no API at all, so this is the
       // closest thing to "share what is on": scan it and it opens on a phone.
       if (ctx.settings.showCode && data.code_url) {
-        body.append(el('img.np-code', { src: data.code_url, alt: 'Scan to open in Spotify' }));
+        footer.append(el('img.np-code', { src: data.code_url, alt: 'Scan to open in Spotify' }));
+      }
+
+      if (footer.childNodes.length) body.append(footer);
+
+      // Tint after layout. The image may already be cached, in which case this
+      // resolves in the same frame; if it is a fresh cover the bar starts
+      // neutral and settles, which is far better than blocking the render on a
+      // network image.
+      if (art) {
+        artColor(art).then((c) => {
+          if (!c || !footer.isConnected) return;
+          footer.style.background = c.bg;
+          footer.style.color = c.ink;
+          // The code is a two-tone SVG; invert it on light bars so the pattern
+          // stays scannable rather than disappearing.
+          footer.classList.toggle('on-light', c.ink === '#000');
+        });
       }
 
       paintProgress();

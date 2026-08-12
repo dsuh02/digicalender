@@ -380,6 +380,16 @@ CREATE TABLE IF NOT EXISTS mail_messages (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mailmsg_uid ON mail_messages(account_id, uid);
 CREATE INDEX IF NOT EXISTS idx_mailmsg_recent ON mail_messages(received_at DESC);
 
+-- Lyrics answers, hits AND misses. LRCLIB is a free volunteer service; asking
+-- it for the same track every few seconds because a widget re-rendered would be
+-- rude, and most misses are permanent anyway.
+CREATE TABLE IF NOT EXISTS lyrics_cache (
+    id         TEXT PRIMARY KEY,
+    key        TEXT NOT NULL UNIQUE,
+    payload    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TEXT NOT NULL
+);
+
 -- Wake-up routines: a time, some days, and a sequence to run on a device.
 --
 -- `last_fired` is a LOCAL DATE STRING, not a timestamp. The scheduler asks
@@ -486,7 +496,7 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def _dedupe_finance_items() -> None:
@@ -552,6 +562,9 @@ def init_db() -> None:
         # v9: pipeline (runs/artifacts/tasks/reads) + mail — all created by
         # SCHEMA above; only the version moves.
         q("UPDATE schema_version SET version = 9")
+    if row["version"] < 10:
+        # v10: lyrics cache — created by SCHEMA above; only the version moves.
+        q("UPDATE schema_version SET version = 10")
 
 
 # --------------------------------------------------------------------- events
@@ -1549,6 +1562,24 @@ def prune_mail_messages(days: int = 30) -> int:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
     return q("DELETE FROM mail_messages WHERE received_at < %s", (cutoff,))
+
+
+# ------------------------------------------------------------------ lyrics
+
+def get_lyrics(key: str, max_age_days: int = 90) -> dict | None:
+    row = q("""SELECT payload FROM lyrics_cache
+                WHERE key = %s AND created_at > %s""",
+            (key, (datetime.now(timezone.utc) - timedelta(days=int(max_age_days)))
+             .strftime("%Y-%m-%dT%H:%M:%SZ")), fetch="one")
+    return row["payload"] if row else None
+
+
+def put_lyrics(key: str, payload: dict) -> None:
+    q("""INSERT INTO lyrics_cache (id, key, payload, created_at)
+         VALUES (%s,%s,%s,%s)
+         ON CONFLICT (key) DO UPDATE SET payload = EXCLUDED.payload,
+                                         created_at = EXCLUDED.created_at""",
+      (new_uid(), key, Jsonb(payload or {}), now_iso()))
 
 
 # ------------------------------------------------------------------ people

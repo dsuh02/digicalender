@@ -898,22 +898,38 @@ body.wall .grid { gap: 4px; }
            font-variant-numeric: tabular-nums; }
 .np.has-art .np-time { color: rgba(255,255,255,.6); }
 
-.np-controls { display: flex; align-items: center; gap: calc(6px * var(--ui-scale));
-               margin-top: calc(8px * var(--ui-scale)); }
+/* One flat bar, tinted from the artwork. `color` is set inline to black or
+   white by contrast ratio, and everything on the bar inherits it — so there is
+   exactly one decision and nothing can drift out of step with it. */
+.np-footer {
+  position: relative; flex: none;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: calc(10px * var(--ui-scale));
+  padding: calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  background: var(--surface-2);
+  color: var(--text-2);
+  transition: background .45s ease, color .45s ease;
+}
+.np-controls { display: flex; align-items: center; gap: calc(6px * var(--ui-scale)); }
 .np-btn {
   min-width: calc(40px * var(--ui-scale)); min-height: calc(40px * var(--ui-scale));
   display: grid; place-items: center; border: none; background: transparent;
   color: var(--text-2); border-radius: 50%; cursor: pointer;
 }
-.np.has-art .np-btn { color: rgba(255,255,255,.85); }
-.np-btn:active { background: rgba(255,255,255,.14); }
-.np-btn.on { color: var(--primary); }
-.np-play { background: rgba(255,255,255,.12); }
+/* Inherit the footer's ink rather than picking their own colour — that single
+   inherited value is what keeps them readable on any cover. */
+.np-footer .np-btn { color: inherit; }
+.np-btn:active { background: rgba(128,128,128,.22); }
+.np-btn.on { opacity: 1; box-shadow: inset 0 -2px 0 currentColor; }
+.np-footer .np-btn:not(.on) { opacity: .82; }
+.np-play { background: rgba(128,128,128,.18); }
 .np-device { font-size: calc(10px * var(--ui-scale)); color: var(--text-3);
              margin-top: calc(4px * var(--ui-scale)); }
 .np.has-art .np-device { color: rgba(255,255,255,.55); }
-.np-code { position: relative; align-self: center; width: 72%; max-width: 260px;
-           margin: 0 0 calc(10px * var(--ui-scale)); }
+.np-code { flex: none; height: calc(38px * var(--ui-scale)); width: auto; opacity: .92; }
+/* The scannable is drawn light-on-dark; on a pale bar it needs inverting or the
+   bars vanish into the background and it stops being scannable. */
+.np-footer.on-light .np-code { filter: invert(1); }
 
 /* ------------------------------------------------------- queue / top lists */
 .queue { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }

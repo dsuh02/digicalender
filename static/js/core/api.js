@@ -129,6 +129,7 @@ export const api = {
   spotifyDisconnect: () => req('/api/spotify/disconnect', { method: 'POST' }),
   spotifyPlaylists: () => req('/api/spotify/playlists'),
   spotifyNow: () => req('/api/spotify/now'),
+  lyricsNow: () => req('/api/lyrics/current'),
   spotifyQueue: () => req('/api/spotify/queue').then(r => r.queue),
   spotifyTop: (kind = 'artists', range = 'medium_term') =>
     req(`/api/spotify/top?kind=${kind}&range=${range}`),

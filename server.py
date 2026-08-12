@@ -30,6 +30,7 @@ import finance
 import gemini
 import hub
 import ics
+import lyrics as lyrics_api
 import mail as mail_client
 import pipeline
 import pipeline.nodes  # noqa: F401  (importing registers the nodes)
@@ -1050,6 +1051,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/spotify/disconnect" and method == "POST":
             spotify_api.disconnect()
             return self._json(200, {"connected": False})
+
+        if path == "/api/lyrics/current" and method == "GET":
+            try:
+                now = spotify_api.now_playing()
+            except spotify_api.SpotifyError as e:
+                raise ApiError(400, e.message)
+            t = now.get("track")
+            if not t:
+                return self._json(200, {"playing": False, "found": False, "synced": []})
+            got = lyrics_api.lookup(t["artists"][0] if t["artists"] else "",
+                                    t["name"], t.get("album", ""), t.get("duration_ms", 0))
+            return self._json(200, {
+                "playing": now.get("playing"),
+                "progress_ms": now.get("progress_ms", 0),
+                "track": {"name": t["name"], "artists": t["artists"],
+                          "duration_ms": t.get("duration_ms", 0)},
+                **got,
+            })
 
         if path == "/api/spotify/now" and method == "GET":
             try:

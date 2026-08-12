@@ -277,6 +277,11 @@ export async function buildForm(schema, initial = {}) {
       node.append(el('h3.form-section', { text: f.section }));
       continue;
     }
+    // Seed from the field's own default when `initial` does not carry the key.
+    // Without this a control RENDERS its default while `values` stays empty, so
+    // a caller that saves everything writes blanks and zeroes for every field
+    // the user did not happen to touch — silently erasing whatever was stored.
+    if (!(f.key in values)) values[f.key] = f.default ?? '';
     const built = await buildControl(f, values, onChange);
     if (f.disabledWhen) deps.push({ key: f.disabledWhen, node: built, invert: true });
     if (f.enabledWhen) deps.push({ key: f.enabledWhen, node: built, invert: false });

@@ -583,7 +583,18 @@ export const LyricsWidget = {
         n.classList.toggle('past', i < idx);
       });
       if (ctx.settings.center !== false && idx >= 0 && lineEls[idx]) {
-        lineEls[idx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+        // NOT scrollIntoView: it scrolls every scrollable ancestor, including
+        // the page track — which slides the whole app to this widget's page
+        // even when you are looking at another one. Scrolling the list itself
+        // is the only thing that should move.
+        const list = lineEls[idx].parentElement;
+        if (list) {
+          const line = lineEls[idx];
+          list.scrollTo({
+            top: line.offsetTop - (list.clientHeight / 2) + (line.offsetHeight / 2),
+            behavior: 'smooth',
+          });
+        }
       }
     };
 

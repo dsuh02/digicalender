@@ -1045,6 +1045,49 @@ class Handler(BaseHTTPRequestHandler):
             spotify_api.disconnect()
             return self._json(200, {"connected": False})
 
+        if path == "/api/spotify/now" and method == "GET":
+            try:
+                return self._json(200, spotify_api.now_playing())
+            except spotify_api.SpotifyError as e:
+                raise ApiError(400, e.message)
+
+        if path == "/api/spotify/queue" and method == "GET":
+            try:
+                return self._json(200, {"queue": spotify_api.queue()})
+            except spotify_api.SpotifyError as e:
+                raise ApiError(400, e.message)
+
+        if path == "/api/spotify/top" and method == "GET":
+            kind = (qs.get("kind") or ["artists"])[0]
+            tr = (qs.get("range") or ["medium_term"])[0]
+            try:
+                return self._json(200, spotify_api.top(kind, tr))
+            except spotify_api.SpotifyError as e:
+                # A token predating user-top-read fails here, and the widget
+                # should say "re-authorise", not "something went wrong".
+                raise ApiError(400, e.message)
+
+        if path == "/api/spotify/control" and method == "POST":
+            b = self._body()
+            cmd = str(b.get("command") or "")
+            try:
+                if cmd == "pause":
+                    spotify_api.pause()
+                elif cmd == "resume":
+                    spotify_api.resume(b.get("device_id") or None)
+                elif cmd in ("next", "previous"):
+                    spotify_api.skip(cmd)
+                elif cmd == "shuffle":
+                    spotify_api.set_shuffle(bool(b.get("on")))
+                elif cmd == "volume":
+                    spotify_api.set_volume(_int(b, "volume", 0, 100),
+                                           b.get("device_id") or None)
+                else:
+                    raise ApiError(400, f"unknown command: {cmd}")
+            except spotify_api.SpotifyError as e:
+                raise ApiError(400, e.message)
+            return self._json(200, {"ok": True})
+
         if path == "/api/spotify/playlists" and method == "GET":
             try:
                 return self._json(200, spotify_api.library())

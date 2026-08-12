@@ -57,7 +57,19 @@ SCOPES = [
     # both are worth the single re-authorisation they cost together.
     "user-read-recently-played",
     "user-read-private",
+    # Listening history and library. All read-only, and all bought by the same
+    # single re-authorisation, so there is no reason to stage them.
+    "user-top-read",
+    "user-library-read",
+    "user-follow-read",
 ]
+
+# Spotify's own scannable image service. Not the Web API and not documented as
+# a public endpoint, but it is what the share sheet uses and it needs no auth.
+# There is NO Jam equivalent: Jam has no Web API at all — Spotify has said it
+# belongs in the playback SDKs — so a running Jam cannot be detected, started,
+# or linked to from here. A code for what is playing is the closest real thing.
+SCANNABLE = "https://scannables.scdn.co/uri/plain/svg/121619/white/640/{uri}"
 
 TIMEOUT = 12.0
 
@@ -388,6 +400,123 @@ def library(max_items: int = 400) -> dict:
     for p in items:
         p["recent_rank"] = rank.get(p["uri"])
     return {"playlists": items, "recency": have_recency, "count": len(items)}
+
+
+def code_url(uri: str) -> str:
+    return SCANNABLE.format(uri=urllib.parse.quote(uri, safe="")) if uri else ""
+
+
+def now_playing() -> dict:
+    """A stable shape for the player, whatever Spotify is doing.
+
+    Returns `playing: False` rather than raising when nothing is active — an
+    idle player is a normal state, not an error, and a widget should not have to
+    tell those apart.
+    """
+    r = call("GET", "/me/player") or {}
+    item = r.get("item") or {}
+    if not item:
+        return {"playing": False, "track": None, "device": None}
+    album = item.get("album") or {}
+    images = album.get("images") or []
+    ctx = r.get("context") or {}
+    dev = r.get("device") or {}
+    return {
+        "playing": bool(r.get("is_playing")),
+        "progress_ms": r.get("progress_ms") or 0,
+        "shuffle": bool(r.get("shuffle_state")),
+        "repeat": r.get("repeat_state") or "off",
+        "track": {
+            "name": item.get("name") or "",
+            "uri": item.get("uri") or "",
+            "artists": [a.get("name", "") for a in item.get("artists") or []],
+            "album": album.get("name") or "",
+            "release_date": album.get("release_date") or "",
+            "duration_ms": item.get("duration_ms") or 0,
+            "explicit": bool(item.get("explicit")),
+            # Largest first; a wall panel wants the 640 and a list wants the 64.
+            "art": [{"url": i.get("url"), "w": i.get("width")} for i in images],
+        },
+        "device": {
+            "name": dev.get("name") or "",
+            "type": dev.get("type") or "",
+            "volume": dev.get("volume_percent"),
+            "supports_volume": bool(dev.get("supports_volume")),
+        },
+        "context": {"type": ctx.get("type") or "", "uri": ctx.get("uri") or ""},
+        # Scan with a phone to open whatever is playing. The closest thing
+        # available to "share this" — Jam itself has no API.
+        "code_url": code_url(ctx.get("uri") or item.get("uri") or ""),
+    }
+
+
+def queue() -> list[dict]:
+    """What is coming up. Spotify returns the current track first; dropped."""
+    r = call("GET", "/me/player/queue") or {}
+    out = []
+    for t in (r.get("queue") or [])[:20]:
+        if not t:
+            continue
+        album = t.get("album") or {}
+        images = album.get("images") or []
+        out.append({
+            "name": t.get("name") or "",
+            "uri": t.get("uri") or "",
+            "artists": [a.get("name", "") for a in t.get("artists") or []],
+            "album": album.get("name") or "",
+            "art": (images[-1] or {}).get("url", "") if images else "",
+            "duration_ms": t.get("duration_ms") or 0,
+        })
+    return out
+
+
+TIME_RANGES = {"short_term": "last 4 weeks", "medium_term": "last 6 months",
+               "long_term": "all time"}
+
+
+def top(kind: str = "artists", time_range: str = "medium_term", limit: int = 20) -> dict:
+    """Top artists or tracks. Needs user-top-read, which an older token lacks."""
+    kind = "tracks" if kind == "tracks" else "artists"
+    tr = time_range if time_range in TIME_RANGES else "medium_term"
+    r = call("GET", f"/me/top/{kind}", None, {"time_range": tr, "limit": min(50, limit)})
+    items = []
+    for it in r.get("items") or []:
+        if not it:
+            continue
+        if kind == "artists":
+            imgs = it.get("images") or []
+            items.append({
+                "name": it.get("name") or "", "uri": it.get("uri") or "",
+                "art": (imgs[-1] or {}).get("url", "") if imgs else "",
+                "genres": (it.get("genres") or [])[:3],
+                "popularity": it.get("popularity"),
+            })
+        else:
+            album = it.get("album") or {}
+            imgs = album.get("images") or []
+            items.append({
+                "name": it.get("name") or "", "uri": it.get("uri") or "",
+                "artists": [a.get("name", "") for a in it.get("artists") or []],
+                "art": (imgs[-1] or {}).get("url", "") if imgs else "",
+                "album": album.get("name") or "",
+            })
+    return {"kind": kind, "time_range": tr, "label": TIME_RANGES[tr], "items": items}
+
+
+def pause() -> None:
+    call("PUT", "/me/player/pause")
+
+
+def resume(device_id: str | None = None) -> None:
+    call("PUT", "/me/player/play", {}, {"device_id": device_id} if device_id else None)
+
+
+def skip(direction: str = "next") -> None:
+    call("POST", f"/me/player/{'previous' if direction == 'previous' else 'next'}")
+
+
+def set_shuffle(on: bool) -> None:
+    call("PUT", "/me/player/shuffle", None, {"state": "true" if on else "false"})
 
 
 def search(q: str, kinds: str = "playlist,album,artist,track", limit: int = 8) -> dict:

@@ -863,6 +863,82 @@ body.wall .grid-host {
 }
 body.wall .grid { gap: 4px; }
 
+/* ---------------------------------------------------------- now playing --- */
+/* The one place this panel uses a large image. Everything else is type on a
+   flat surface, so the art is allowed to carry the whole widget — but it sits
+   behind a scrim, because white text on an arbitrary album cover is a coin
+   flip and the track name has to win. */
+.np { flex: 1; min-height: 0; position: relative; display: flex;
+      flex-direction: column; justify-content: flex-end; overflow: hidden;
+      border-radius: var(--r-card); }
+.np-art {
+  position: absolute; inset: 0;
+  background-size: cover; background-position: center;
+}
+.np.has-art .np-art::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(to top, rgba(0,0,0,.88) 0%, rgba(0,0,0,.55) 45%, rgba(0,0,0,.15) 100%);
+}
+.np-info { position: relative; padding: calc(12px * var(--ui-scale));
+           display: flex; flex-direction: column; gap: calc(2px * var(--ui-scale)); }
+.np-title { font-size: calc(22px * var(--ui-scale)); font-weight: 500; line-height: 1.15;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-artist { font-size: calc(14px * var(--ui-scale)); color: var(--text-2);
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-album { font-size: calc(11px * var(--ui-scale)); color: var(--text-3);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np.has-art .np-artist, .np.has-art .np-album { color: rgba(255,255,255,.72); }
+.np.has-art .np-title { color: #fff; }
+
+.np-bar { height: calc(4px * var(--ui-scale)); background: rgba(255,255,255,.22);
+          border-radius: 3px; overflow: hidden; margin-top: calc(8px * var(--ui-scale)); }
+.np-bar-fill { height: 100%; width: 0; background: var(--primary); border-radius: 3px; }
+.np-times { display: flex; justify-content: space-between; }
+.np-time { font-size: calc(10px * var(--ui-scale)); color: var(--text-3);
+           font-variant-numeric: tabular-nums; }
+.np.has-art .np-time { color: rgba(255,255,255,.6); }
+
+.np-controls { display: flex; align-items: center; gap: calc(6px * var(--ui-scale));
+               margin-top: calc(8px * var(--ui-scale)); }
+.np-btn {
+  min-width: calc(40px * var(--ui-scale)); min-height: calc(40px * var(--ui-scale));
+  display: grid; place-items: center; border: none; background: transparent;
+  color: var(--text-2); border-radius: 50%; cursor: pointer;
+}
+.np.has-art .np-btn { color: rgba(255,255,255,.85); }
+.np-btn:active { background: rgba(255,255,255,.14); }
+.np-btn.on { color: var(--primary); }
+.np-play { background: rgba(255,255,255,.12); }
+.np-device { font-size: calc(10px * var(--ui-scale)); color: var(--text-3);
+             margin-top: calc(4px * var(--ui-scale)); }
+.np.has-art .np-device { color: rgba(255,255,255,.55); }
+.np-code { position: relative; align-self: center; width: 72%; max-width: 260px;
+           margin: 0 0 calc(10px * var(--ui-scale)); }
+
+/* ------------------------------------------------------- queue / top lists */
+.queue { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.queue-head { font-size: calc(11px * var(--ui-scale)); font-weight: 600;
+              letter-spacing: .09em; text-transform: uppercase; color: var(--text-3);
+              margin-bottom: calc(6px * var(--ui-scale)); }
+.queue-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; touch-action: pan-y;
+              display: flex; flex-direction: column; }
+.queue-row { display: flex; align-items: center; gap: calc(9px * var(--ui-scale));
+             padding: calc(6px * var(--ui-scale)) 0;
+             border-bottom: 1px solid var(--line); }
+.queue-row:last-child { border-bottom: none; }
+.queue-n { flex: none; min-width: calc(16px * var(--ui-scale)); text-align: right;
+           font-size: calc(11px * var(--ui-scale)); color: var(--text-3);
+           font-variant-numeric: tabular-nums; }
+.queue-art { flex: none; width: calc(34px * var(--ui-scale));
+             height: calc(34px * var(--ui-scale)); border-radius: 4px; object-fit: cover; }
+.queue-main { flex: 1; min-width: 0; }
+.queue-title { font-size: calc(13px * var(--ui-scale)); white-space: nowrap;
+               overflow: hidden; text-overflow: ellipsis; }
+.queue-artist { font-size: calc(11px * var(--ui-scale)); color: var(--text-3);
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.queue-len { flex: none; font-size: calc(11px * var(--ui-scale)); color: var(--text-3);
+             font-variant-numeric: tabular-nums; }
+
 .pl-list {
   display: flex; flex-direction: column; gap: 2px;
   max-height: 34vh; overflow-y: auto; margin: 6px 0 10px;

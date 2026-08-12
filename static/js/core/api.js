@@ -128,6 +128,12 @@ export const api = {
     method: 'POST', body: JSON.stringify({ redirect }) }),
   spotifyDisconnect: () => req('/api/spotify/disconnect', { method: 'POST' }),
   spotifyPlaylists: () => req('/api/spotify/playlists'),
+  spotifyNow: () => req('/api/spotify/now'),
+  spotifyQueue: () => req('/api/spotify/queue').then(r => r.queue),
+  spotifyTop: (kind = 'artists', range = 'medium_term') =>
+    req(`/api/spotify/top?kind=${kind}&range=${range}`),
+  spotifyControl: (command, extra = {}) => req('/api/spotify/control', {
+    method: 'POST', body: JSON.stringify({ command, ...extra }) }),
   spotifySearch: q => req(`/api/spotify/search?q=${encodeURIComponent(q)}`).then(r => r.results),
   alarms: () => req('/api/alarms'),
   createAlarm: d => req('/api/alarms', { method: 'POST', body: JSON.stringify(d) }).then(r => r.alarm),

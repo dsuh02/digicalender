@@ -1045,6 +1045,12 @@ class Handler(BaseHTTPRequestHandler):
             spotify_api.disconnect()
             return self._json(200, {"connected": False})
 
+        if path == "/api/spotify/playlists" and method == "GET":
+            try:
+                return self._json(200, spotify_api.library())
+            except spotify_api.SpotifyError as e:
+                raise ApiError(400, e.message)
+
         if path == "/api/spotify/search" and method == "GET":
             term = (qs.get("q") or [""])[0].strip()
             if not term:

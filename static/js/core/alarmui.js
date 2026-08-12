@@ -126,8 +126,51 @@ export async function openAlarmEditor(alarm, data, onSaved) {
     return b;
   });
 
-  /* Search, so nobody has to know what a URI is. */
-  const searchBox = el('input.input', { type: 'text', placeholder: 'Search your Spotify…' });
+  /* Your own playlists, most recently played first — because picking what to
+     wake up to should be a tap, not a paste. Search stays underneath for
+     anything not already in the library. */
+  const mine = el('div.pl-list');
+  const mineNote = el('div.field-help', { text: 'Loading your playlists…' });
+
+  const markChosen = () => {
+    const cur = uri.value.trim();
+    mine.querySelectorAll('.pl-row').forEach(r => {
+      r.classList.toggle('chosen', r.dataset.uri === cur);
+    });
+  };
+
+  const loadMine = async () => {
+    try {
+      const lib = await api.spotifyPlaylists();
+      clear(mine);
+      mineNote.textContent = lib.recency
+        ? `${lib.count} playlists, most recently played first.`
+        : `${lib.count} playlists, in Spotify's own order — re-authorise to sort by what you actually play.`;
+      lib.playlists.forEach((pl) => {
+        const row = el('button.pl-row', {
+          type: 'button', dataset: { uri: pl.uri },
+          onclick: (e) => {
+            e.preventDefault();
+            uri.value = pl.uri;
+            uri.dispatchEvent(new Event('input'));
+            markChosen();
+          },
+        }, [
+          el('span.pl-name', { text: pl.name }),
+          el('span.pl-meta', {
+            text: [pl.recent_rank != null ? 'recent' : '', pl.owner].filter(Boolean).join(' · '),
+          }),
+        ]);
+        mine.append(row);
+      });
+      markChosen();
+    } catch (e) {
+      mineNote.textContent = e.message;
+    }
+  };
+
+  /* Search, for anything not already in the library. */
+  const searchBox = el('input.input', { type: 'text', placeholder: 'Search all of Spotify…' });
   const results = el('div.dev-list');
   searchBox.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
@@ -182,6 +225,8 @@ export async function openAlarmEditor(alarm, data, onSaved) {
     ]),
 
     el('h3.form-section', { text: 'What to play' }),
+    mineNote,
+    mine,
     el('label.field', {}, [
       el('span.field-label', { text: 'Spotify link or URI' }), uri,
       el('span.field-help', {
@@ -197,10 +242,14 @@ export async function openAlarmEditor(alarm, data, onSaved) {
   const noMusic = el('p.sheet-note.warn-note', {
     text: 'This alarm has no music set — it will wake the Roku and open Spotify, but play nothing.',
   });
-  const refreshNoMusic = () => { noMusic.hidden = !!uri.value.trim(); };
+  const refreshNoMusic = () => {
+    noMusic.hidden = !!uri.value.trim();
+    markChosen();
+  };
   uri.addEventListener('input', refreshNoMusic);
   refreshNoMusic();
   body.append(noMusic);
+  loadMine();
 
   const collect = () => ({
     name: name.value.trim() || 'Alarm',

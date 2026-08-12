@@ -127,6 +127,7 @@ export const api = {
   spotifyComplete: redirect => req('/api/spotify/complete', {
     method: 'POST', body: JSON.stringify({ redirect }) }),
   spotifyDisconnect: () => req('/api/spotify/disconnect', { method: 'POST' }),
+  spotifyPlaylists: () => req('/api/spotify/playlists'),
   spotifySearch: q => req(`/api/spotify/search?q=${encodeURIComponent(q)}`).then(r => r.results),
   alarms: () => req('/api/alarms'),
   createAlarm: d => req('/api/alarms', { method: 'POST', body: JSON.stringify(d) }).then(r => r.alarm),

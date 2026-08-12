@@ -863,6 +863,23 @@ body.wall .grid-host {
 }
 body.wall .grid { gap: 4px; }
 
+.pl-list {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 34vh; overflow-y: auto; margin: 6px 0 10px;
+  border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 4px;
+}
+.pl-row {
+  display: flex; align-items: baseline; gap: 10px; width: 100%;
+  min-height: 42px; padding: 6px 10px; text-align: left;
+  background: transparent; border: none; border-radius: var(--r-ctl);
+  color: var(--text); cursor: pointer;
+}
+.pl-row:active { background: var(--surface-2); }
+.pl-row.chosen { background: var(--primary-soft); box-shadow: inset 2px 0 0 var(--primary); }
+.pl-name { flex: 1; min-width: 0; font-size: 14px; white-space: nowrap;
+           overflow: hidden; text-overflow: ellipsis; }
+.pl-meta { flex: none; font-size: 11px; color: var(--text-3); }
+
 .day-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .day-btn {
   min-width: 46px; min-height: 40px; padding: 0 8px;

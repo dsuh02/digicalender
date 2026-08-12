@@ -51,6 +51,12 @@ SCOPES = [
     "user-modify-playback-state",
     "user-read-currently-playing",
     "playlist-read-private",
+    "playlist-read-collaborative",
+    # Ordering playlists by what you actually listen to needs the history, and
+    # the plan name (free vs premium) needs the profile. Both are read-only and
+    # both are worth the single re-authorisation they cost together.
+    "user-read-recently-played",
+    "user-read-private",
 ]
 
 TIMEOUT = 12.0
@@ -287,6 +293,72 @@ def set_volume(percent: int, device_id: str | None = None) -> None:
     if device_id:
         params["device_id"] = device_id
     call("PUT", "/me/player/volume", None, params)
+
+
+def playlists(max_items: int = 400) -> list[dict]:
+    """Every playlist in the library, in Spotify's own order."""
+    out, offset = [], 0
+    while offset < max_items:
+        page = call("GET", "/me/playlists", None, {"limit": 50, "offset": offset})
+        items = [p for p in (page.get("items") or []) if p]
+        for p in items:
+            owner = p.get("owner") or {}
+            out.append({
+                "uri": p.get("uri", ""),
+                "id": p.get("id", ""),
+                "name": p.get("name") or "(untitled)",
+                "owner": owner.get("display_name") or owner.get("id") or "",
+                "owner_id": owner.get("id") or "",
+                "tracks": (p.get("tracks") or {}).get("total"),
+                "image": ((p.get("images") or [{}])[0] or {}).get("url", ""),
+                "collaborative": bool(p.get("collaborative")),
+            })
+        if len(items) < 50:
+            break
+        offset += 50
+    return out
+
+
+def recent_context_uris(limit: int = 50) -> list[str]:
+    """Playlist/album URIs most recently played, newest first, deduped.
+
+    Spotify has no "recently played playlists" endpoint. It has recently played
+    TRACKS, each carrying the context it was played from — so recency is derived
+    from that. Needs `user-read-recently-played`; a token issued before that
+    scope was requested returns 403, which the caller treats as "no ordering
+    available" rather than an error.
+    """
+    res = call("GET", "/me/player/recently-played", None, {"limit": min(50, limit)})
+    seen, order = set(), []
+    for item in res.get("items") or []:
+        ctx = (item or {}).get("context") or {}
+        uri = ctx.get("uri") or ""
+        if uri and uri not in seen:
+            seen.add(uri)
+            order.append(uri)
+    return order
+
+
+def library(max_items: int = 400) -> dict:
+    """Playlists ordered by what has actually been played most recently.
+
+    Degrades honestly: without the history scope the list is still returned, in
+    Spotify's order, with `recency` false so the UI can say why.
+    """
+    items = playlists(max_items)
+    try:
+        recent = recent_context_uris()
+        have_recency = True
+    except SpotifyError:
+        recent, have_recency = [], False
+
+    rank = {uri: i for i, uri in enumerate(recent)}
+    # Played ones first in recency order; everything else keeps Spotify's order
+    # behind them, rather than being sorted arbitrarily.
+    items.sort(key=lambda p: (rank.get(p["uri"], len(rank)),))
+    for p in items:
+        p["recent_rank"] = rank.get(p["uri"])
+    return {"playlists": items, "recency": have_recency, "count": len(items)}
 
 
 def search(q: str, kinds: str = "playlist,album,artist,track", limit: int = 8) -> dict:

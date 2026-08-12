@@ -1070,9 +1070,28 @@ class Handler(BaseHTTPRequestHandler):
                 **got,
             })
 
+        if path == "/api/spotify/code.svg" and method == "GET":
+            uri = (qs.get("uri") or [""])[0].strip()
+            if not uri.startswith("spotify:"):
+                raise ApiError(400, "uri must be a spotify: URI")
+            ink = (qs.get("ink") or ["white"])[0]
+            try:
+                svg = spotify_api.code_svg(uri, ink)
+            except spotify_api.SpotifyError as e:
+                raise ApiError(502, e.message)
+            # The bars for a given URI never change, so let the browser keep it.
+            return self._send(200, svg, "image/svg+xml",
+                              {"Cache-Control": "public, max-age=86400"})
+
         if path == "/api/spotify/now" and method == "GET":
             try:
                 return self._json(200, spotify_api.now_playing())
+            except spotify_api.SpotifyError as e:
+                raise ApiError(400, e.message)
+
+        if path == "/api/spotify/timeline" and method == "GET":
+            try:
+                return self._json(200, spotify_api.timeline())
             except spotify_api.SpotifyError as e:
                 raise ApiError(400, e.message)
 
@@ -1104,6 +1123,9 @@ class Handler(BaseHTTPRequestHandler):
                     spotify_api.skip(cmd)
                 elif cmd == "shuffle":
                     spotify_api.set_shuffle(bool(b.get("on")))
+                elif cmd == "seek":
+                    spotify_api.seek(_int(b, "position_ms", 0, 24 * 3600 * 1000),
+                                     b.get("device_id") or None)
                 elif cmd == "volume":
                     spotify_api.set_volume(_int(b, "volume", 0, 100),
                                            b.get("device_id") or None)

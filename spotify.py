@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -453,6 +454,53 @@ def code_url(uri: str) -> str:
     return SCANNABLE.format(uri=urllib.parse.quote(uri, safe="")) if uri else ""
 
 
+_CODE_CACHE: dict[str, bytes] = {}
+_BG_RECT = re.compile(rb'<rect\s+x="0"\s+y="0"[^>]*?/>')
+
+
+def code_svg(uri: str, ink: str = "white") -> bytes:
+    """The scannable with its background removed, so only the bars remain.
+
+    Spotify's service rejects `transparent` as a background colour (400), and
+    the SVG it returns opens with one full-bleed <rect> painting the panel. That
+    rect is the background — dropping it leaves the bars and the logo over
+    whatever is behind them, which is the only way to sit the code on a tinted
+    footer without a black slab around it.
+
+    `ink` picks the bar colour at the source rather than inverting afterwards; a
+    CSS filter would also invert the logo and any future colour in the artwork.
+    """
+    ink = "black" if str(ink).lower() == "black" else "white"
+    key = f"{uri}|{ink}"
+    if key in _CODE_CACHE:
+        return _CODE_CACHE[key]
+
+    # Background is requested as the OPPOSITE of the ink purely so the fetched
+    # file is legible if anything ever renders it unmodified.
+    bg = "ffffff" if ink == "black" else "000000"
+    url = (f"https://scannables.scdn.co/uri/plain/svg/{bg}/{ink}/640/"
+           + urllib.parse.quote(uri, safe=""))
+    req = urllib.request.Request(url, headers={"User-Agent": "DigiCalender/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            raw = r.read()
+    except (urllib.error.URLError, OSError) as e:
+        raise SpotifyError(f"Could not fetch the code image: {e}", 0)
+
+    out = _BG_RECT.sub(b"", raw, count=1)
+    if len(_CODE_CACHE) > 64:            # a wall panel, not a CDN
+        _CODE_CACHE.clear()
+    _CODE_CACHE[key] = out
+    return out
+
+
+def seek(position_ms: int, device_id: str | None = None) -> None:
+    params = {"position_ms": max(0, int(position_ms))}
+    if device_id:
+        params["device_id"] = device_id
+    call("PUT", "/me/player/seek", None, params)
+
+
 def now_playing() -> dict:
     """A stable shape for the player, whatever Spotify is doing.
 
@@ -495,6 +543,55 @@ def now_playing() -> dict:
         # available to "share this" — Jam itself has no API.
         "code_url": code_url(ctx.get("uri") or item.get("uri") or ""),
     }
+
+
+def _track_view(t: dict) -> dict:
+    album = (t or {}).get("album") or {}
+    images = album.get("images") or []
+    return {
+        "name": t.get("name") or "",
+        "uri": t.get("uri") or "",
+        "artists": [a.get("name", "") for a in t.get("artists") or []],
+        "album": album.get("name") or "",
+        "art": (images[-1] or {}).get("url", "") if images else "",
+        "duration_ms": t.get("duration_ms") or 0,
+    }
+
+
+def timeline(history: int = 20) -> dict:
+    """Previously played, what is on now, and what is next — one ordered strip.
+
+    History arrives newest-first and is reversed here, so the whole list reads
+    forward in time: oldest at the start, the queue at the end. A caller
+    rendering top-to-bottom or left-to-right can then just walk it.
+    """
+    past: list[dict] = []
+    try:
+        rec = call("GET", "/me/player/recently-played", None, {"limit": min(50, history)})
+        for item in (rec.get("items") or []):
+            t = (item or {}).get("track")
+            if t:
+                past.append(_track_view(t))
+        past.reverse()
+    except SpotifyError:
+        past = []                       # no history scope, or nothing recorded
+
+    current, upcoming = None, []
+    try:
+        q = call("GET", "/me/player/queue") or {}
+        cur = q.get("currently_playing")
+        if cur:
+            current = _track_view(cur)
+        upcoming = [_track_view(t) for t in (q.get("queue") or [])[:20] if t]
+    except SpotifyError:
+        pass
+
+    # The queue endpoint repeats the current track at the head of history for
+    # some clients; drop an immediate duplicate so it is not shown twice.
+    if current and past and past[-1].get("uri") == current.get("uri"):
+        past.pop()
+
+    return {"past": past, "current": current, "next": upcoming}
 
 
 def queue() -> list[dict]:

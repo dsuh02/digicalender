@@ -104,6 +104,9 @@ export function artColor(url) {
           bg: `rgb(${soft[0]}, ${soft[1]}, ${soft[2]})`,
           ink: inkFor(soft[0], soft[1], soft[2]),
           rgb: soft,
+          // Which side of the line the artwork falls on. Stored once here so
+          // callers never re-derive it and reach a different answer.
+          isLight: luminance(soft[0], soft[1], soft[2]) > 0.45,
         };
         CACHE.set(url, out);
         resolve(out);

@@ -12,12 +12,14 @@
 
 import { api, bus } from '../core/api.js';
 import { artColor } from '../core/artcolor.js';
+import { autoSize } from '../core/charts.js';
 import { icon } from '../core/icons.js';
 import { toast } from '../core/sheet.js';
 import { clear, el } from '../core/util.js';
 
 const REFETCH_MS = 8000;    // polite to the API
 const TICK_MS = 250;        // smooth enough for a progress bar
+const ARM_MS = 20000;       // how long scrubbing stays available after a tap
 
 function mmss(ms) {
   const t = Math.max(0, Math.round((ms || 0) / 1000));
@@ -86,6 +88,49 @@ export const NowPlayingWidget = {
 
     let bar = null;
     let elapsed = null;
+    let track = null;
+    let tone = null;            // {bg, ink, isLight} from the artwork
+    // Armed = the user has tapped once. Seeking a wall panel by brushing past
+    // it would be miserable, so scrubbing is deliberately behind one tap, and
+    // it disarms itself rather than staying live forever.
+    let armed = false;
+    let disarmTimer = null;
+
+    const setArmed = (on) => {
+      armed = on;
+      body.classList.toggle('armed', on);
+      clearTimeout(disarmTimer);
+      if (on) disarmTimer = setTimeout(() => setArmed(false), ARM_MS);
+      applyTone();
+    };
+
+    /** Footer colour: the artwork's tint normally, flat black or white armed. */
+    const applyTone = () => {
+      const footer = body.querySelector('.np-footer');
+      if (!footer || !tone) return;
+      if (armed) {
+        // Which flat colour is decided by the SAME light/dark call already made
+        // for the tint, so the two can never disagree.
+        const flat = tone.isLight ? '#fff' : '#000';
+        footer.style.background = flat;
+        footer.style.color = tone.isLight ? '#000' : '#fff';
+        footer.classList.toggle('on-light', tone.isLight);
+      } else {
+        footer.style.background = tone.bg;
+        footer.style.color = tone.ink;
+        footer.classList.toggle('on-light', tone.ink === '#000');
+      }
+      const code = body.querySelector('.np-code');
+      if (code) code.src = codeSrc();
+    };
+
+    const codeSrc = () => {
+      if (!data || !data.context) return '';
+      const uri = data.context.uri || (data.track && data.track.uri) || '';
+      if (!uri) return '';
+      const dark = armed ? !tone?.isLight : (tone ? tone.ink === '#fff' : true);
+      return `/api/spotify/code.svg?uri=${encodeURIComponent(uri)}&ink=${dark ? 'white' : 'black'}`;
+    };
 
     const draw = () => {
       clear(body);
@@ -117,7 +162,47 @@ export const NowPlayingWidget = {
 
       bar = el('div.np-bar-fill');
       elapsed = el('span.np-time');
-      const track = el('div.np-bar', {}, [bar]);
+      track = el('div.np-bar', {}, [bar, el('div.np-bar-knob')]);
+
+      // Scrubbing, live only while armed. Pointer capture so a finger that
+      // slides off the bar keeps controlling it, and the seek is sent on
+      // RELEASE rather than continuously — one request, not thirty.
+      let scrubbing = false;
+      const fractionAt = (clientX) => {
+        const r = track.getBoundingClientRect();
+        return r.width ? Math.max(0, Math.min(1, (clientX - r.left) / r.width)) : 0;
+      };
+      const preview = (f) => {
+        bar.style.width = `${f * 100}%`;
+        if (elapsed) elapsed.textContent = mmss(f * (t.duration_ms || 0));
+      };
+      track.addEventListener('pointerdown', (e) => {
+        if (!armed) return;               // a tap elsewhere arms it first
+        e.stopPropagation();
+        scrubbing = true;
+        track.setPointerCapture(e.pointerId);
+        preview(fractionAt(e.clientX));
+      });
+      track.addEventListener('pointermove', (e) => {
+        if (!scrubbing) return;
+        e.stopPropagation();
+        preview(fractionAt(e.clientX));
+      });
+      const endScrub = (e) => {
+        if (!scrubbing) return;
+        scrubbing = false;
+        e.stopPropagation();
+        const ms = Math.round(fractionAt(e.clientX) * (t.duration_ms || 0));
+        // Assume it worked so the bar does not snap backwards for the half
+        // second before Spotify reports the new position.
+        data.progress_ms = ms;
+        fetchedAt = performance.now();
+        send('seek', { position_ms: ms });
+        setArmed(true);                   // a scrub restarts the disarm clock
+      };
+      track.addEventListener('pointerup', endScrub);
+      track.addEventListener('pointercancel', () => { scrubbing = false; });
+
       info.append(
         track,
         el('div.np-times', {}, [
@@ -164,8 +249,9 @@ export const NowPlayingWidget = {
 
       // A Spotify Code, not a Jam link — Jam has no API at all, so this is the
       // closest thing to "share what is on": scan it and it opens on a phone.
-      if (ctx.settings.showCode && data.code_url) {
-        footer.append(el('img.np-code', { src: data.code_url, alt: 'Scan to open in Spotify' }));
+      if (ctx.settings.showCode) {
+        const src = codeSrc();
+        if (src) footer.append(el('img.np-code', { src, alt: 'Scan to open in Spotify' }));
       }
 
       if (footer.childNodes.length) body.append(footer);
@@ -177,12 +263,11 @@ export const NowPlayingWidget = {
       if (art) {
         artColor(art).then((c) => {
           if (!c || !footer.isConnected) return;
-          footer.style.background = c.bg;
-          footer.style.color = c.ink;
-          // The code is a two-tone SVG; invert it on light bars so the pattern
-          // stays scannable rather than disappearing.
-          footer.classList.toggle('on-light', c.ink === '#000');
+          tone = c;
+          applyTone();
         });
+      } else {
+        tone = null;
       }
 
       paintProgress();
@@ -200,6 +285,10 @@ export const NowPlayingWidget = {
           && pos >= data.track.duration_ms - 400) load();
     };
 
+    // A single tap anywhere in the box arms it: the footer goes flat and the
+    // progress bar becomes scrubbable. Tapping again puts it back.
+    body.addEventListener('click', () => setArmed(!armed));
+
     load();
     poll = setInterval(load, REFETCH_MS);
     tick = setInterval(paintProgress, TICK_MS);
@@ -207,57 +296,108 @@ export const NowPlayingWidget = {
 
     return {
       refresh: load,
-      destroy: () => { off(); clearInterval(poll); clearInterval(tick); },
+      destroy: () => {
+        off(); clearInterval(poll); clearInterval(tick); clearTimeout(disarmTimer);
+      },
     };
   },
 };
 
 /* ------------------------------------------------------------------ up next */
 
+/**
+ * How many slots to spend on each side of the current track.
+ *
+ * The rule: centre the current track when there is enough on both sides to
+ * fill the box, otherwise use whatever there is. So a full history and an empty
+ * queue puts "now" at the END (bottom, or right) with the past above it, and an
+ * empty history with a full queue puts it at the START — in both cases the box
+ * stays full rather than half-empty around a centred item.
+ */
+export function timelineWindow(nPast, nNext, capacity) {
+  if (capacity <= 0) return { before: 0, after: 0 };
+  if (capacity === 1) return { before: 0, after: 0 };
+  const slots = capacity - 1;                    // current occupies one
+  let before = Math.min(nPast, Math.floor(slots / 2));
+  let after = Math.min(nNext, slots - before);
+  // Whatever the other side could not use comes back to this one.
+  before = Math.min(nPast, slots - after);
+  return { before, after };
+}
+
 export const UpNextWidget = {
-  type: 'up_next_music', name: 'Up next (music)', icon: 'speaker', category: 'Home',
-  defaultSize: { w: 12, h: 12 }, minSize: { w: 5, h: 4 },
+  type: 'up_next_music', name: 'Queue', icon: 'speaker', category: 'Home',
+  defaultSize: { w: 12, h: 14 }, minSize: { w: 4, h: 4 },
   settings: [
-    { key: 'count', label: 'How many', type: 'slider', min: 3, max: 20, default: 8 },
     { key: 'showArt', label: 'Show artwork', type: 'toggle', default: true },
+    { key: 'history', label: 'Include previously played', type: 'toggle', default: true },
   ],
 
   render(host, ctx) {
     const body = el('div.queue');
     host.append(body);
+    let data = { past: [], current: null, next: [] };
+    let stopSize = null;
     let poll = null;
 
     const load = async () => {
-      let items = [];
-      let error = '';
-      try { items = await api.spotifyQueue(); }
-      catch (e) { error = e.message; }
+      try { data = await api.spotifyTimeline(); }
+      catch (e) { data = { past: [], current: null, next: [], error: e.message }; }
+      draw();
+    };
+
+    const draw = () => {
+      if (stopSize) { stopSize(); stopSize = null; }
       clear(body);
-      if (error) { body.append(el('div.empty-hint', { text: error })); return; }
-      if (!items.length) {
-        body.append(el('div.empty-hint', { text: 'Nothing queued' }));
+
+      if (data.error) { body.append(el('div.empty-hint', { text: data.error })); return; }
+      if (!data.current && !data.past.length && !data.next.length) {
+        body.append(el('div.empty-hint', { text: 'Nothing playing or queued' }));
         return;
       }
-      const list = el('div.queue-list');
-      items.slice(0, Number(ctx.settings.count || 8)).forEach((t, i) => {
-        list.append(el('div.queue-row', {}, [
-          el('span.queue-n', { text: String(i + 1) }),
-          ctx.settings.showArt !== false && t.art
-            ? el('img.queue-art', { src: t.art, alt: '' }) : null,
-          el('div.queue-main', {}, [
-            el('div.queue-title', { text: t.name }),
-            el('div.queue-artist', { text: t.artists.join(', ') }),
-          ]),
-          el('span.queue-len', { text: mmss(t.duration_ms) }),
-        ]));
+
+      const strip = el('div.tl');
+      body.append(strip);
+
+      stopSize = autoSize(strip, (w, h, k) => {
+        // Wide-and-short reads left to right; anything else reads top to
+        // bottom. The row size follows the widget's own scale so the count is
+        // computed against what will actually be rendered.
+        const horizontal = w > h * 1.6;
+        const rowH = 46 * k;
+        const colW = 132 * k;
+        const capacity = Math.max(1, Math.floor(horizontal ? w / colW : h / rowH));
+
+        const past = ctx.settings.history === false ? [] : data.past;
+        const { before, after } = timelineWindow(
+          past.length, data.next.length, data.current ? capacity : capacity + 1);
+
+        const items = [
+          ...past.slice(past.length - before).map(t => ({ t, when: 'past' })),
+          ...(data.current ? [{ t: data.current, when: 'now' }] : []),
+          ...data.next.slice(0, after).map(t => ({ t, when: 'next' })),
+        ];
+
+        const list = el(`div.tl-list${horizontal ? '.horizontal' : ''}`);
+        items.forEach(({ t, when }) => {
+          list.append(el(`div.tl-item.${when}`, {}, [
+            ctx.settings.showArt !== false && t.art
+              ? el('img.tl-art', { src: t.art, alt: '' }) : null,
+            el('div.tl-main', {}, [
+              el('div.tl-title', { text: t.name }),
+              el('div.tl-artist', { text: (t.artists || []).join(', ') }),
+            ]),
+          ]));
+        });
+        return list;
       });
-      body.append(list);
     };
 
     load();
     poll = setInterval(load, 15000);
     const off = bus.on('spotify_changed', load);
-    return { refresh: load, destroy: () => { off(); clearInterval(poll); } };
+    return { refresh: load,
+             destroy: () => { off(); clearInterval(poll); if (stopSize) stopSize(); } };
   },
 };
 
@@ -284,8 +424,10 @@ export const TopMusicWidget = {
   render(host, ctx) {
     const body = el('div.queue');
     host.append(body);
+    let stopSize = null;
 
     const load = async () => {
+      if (stopSize) { stopSize(); stopSize = null; }
       clear(body);
       let data;
       try {
@@ -305,27 +447,37 @@ export const TopMusicWidget = {
       body.append(el('div.queue-head', {
         text: `${data.kind === 'tracks' ? 'Top tracks' : 'Top artists'} · ${data.label}`,
       }));
-      const list = el('div.queue-list');
-      data.items.slice(0, Number(ctx.settings.count || 10)).forEach((it, i) => {
-        list.append(el('div.queue-row', {}, [
-          el('span.queue-n', { text: String(i + 1) }),
-          it.art ? el('img.queue-art', { src: it.art, alt: '' }) : null,
-          el('div.queue-main', {}, [
-            el('div.queue-title', { text: it.name }),
-            el('div.queue-artist', {
-              text: data.kind === 'tracks'
-                ? (it.artists || []).join(', ')
-                : (it.genres || []).join(', '),
-            }),
-          ]),
-        ]));
+      const holder = el('div.top-holder');
+      body.append(holder);
+      if (stopSize) { stopSize(); stopSize = null; }
+      stopSize = autoSize(holder, (w, h, k) => {
+        // A short wide box gets a row of cards; a tall one gets a ranked list.
+        // Same data, laid out for the shape it was actually given.
+        const cards = w > h * 1.7;
+        const list = el(`div.top-list${cards ? '.cards' : ''}`);
+        const room = cards ? Math.max(1, Math.floor(w / (96 * k)))
+                           : Math.max(1, Math.floor(h / (44 * k)));
+        data.items.slice(0, Math.min(Number(ctx.settings.count || 10), room))
+          .forEach((it, i) => {
+            list.append(el('div.top-item', {}, [
+              it.art ? el('img.top-art', { src: it.art, alt: '' }) : null,
+              el('div.top-main', {}, [
+                el('div.top-name', { text: `${cards ? '' : `${i + 1}. `}${it.name}` }),
+                el('div.top-sub', {
+                  text: data.kind === 'tracks'
+                    ? (it.artists || []).join(', ')
+                    : (it.genres || []).join(', '),
+                }),
+              ]),
+            ]));
+          });
+        return list;
       });
-      body.append(list);
     };
 
     load();
     const off = bus.on('spotify_changed', load);
-    return { refresh: load, destroy: off };
+    return { refresh: load, destroy: () => { off(); if (stopSize) stopSize(); } };
   },
 };
 

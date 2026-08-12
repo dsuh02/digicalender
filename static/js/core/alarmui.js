@@ -83,8 +83,12 @@ export async function openAlarmEditor(alarm, data, onSaved) {
                                   value: alarm.volume == null ? '' : alarm.volume });
   const uri = el('input.input', { type: 'text', value: alarm.spotify_uri || '',
                                   placeholder: 'spotify:playlist:… or an open.spotify.com link' });
-  const connectName = el('input.input', { type: 'text', value: alarm.device_name || '',
-                                          placeholder: 'e.g. Roku Ultra LT' });
+  const connectName = el('input.input', {
+    type: 'text', value: alarm.device_name || '',
+    placeholder: 'defaults to the Roku above',
+  });
+  if (!alarm.device_name) connectName.dataset.auto = '1';
+  connectName.addEventListener('input', () => { connectName.dataset.auto = '0'; });
   const enabled = el('input.switch-input', { type: 'checkbox' });
   enabled.checked = alarm.enabled !== false;
   const shuffle = el('input.switch-input', { type: 'checkbox' });
@@ -97,6 +101,18 @@ export async function openAlarmEditor(alarm, data, onSaved) {
     if (d.id === alarm.device_id) o.selected = true;
     devSel.append(o);
   });
+  // Keep the Connect target in step with the Roku unless it has been typed
+  // over. Leaving these two to drift apart means launching Spotify on one
+  // device and searching for another.
+  const syncConnectName = () => {
+    const chosen = devices.find(d => d.id === devSel.value);
+    if (!chosen) return;
+    if (!connectName.value.trim() || connectName.dataset.auto === '1') {
+      connectName.value = chosen.name;
+      connectName.dataset.auto = '1';
+    }
+  };
+  devSel.addEventListener('change', syncConnectName);
 
   const dayRow = el('div.day-row');
   const dayBtns = DAY_LABELS.map((lbl, i) => {
@@ -152,7 +168,7 @@ export async function openAlarmEditor(alarm, data, onSaved) {
     el('label.field', {}, [
       el('span.field-label', { text: 'Spotify Connect device name' }), connectName,
       el('span.field-help', {
-        text: 'Matched by name once the Roku app registers itself. Leave blank to take whatever device appears first.',
+        text: 'Matched by name once the Roku app registers itself. Leave blank and it follows the Roku chosen above.',
       }),
     ]),
     el('label.field', {}, [
@@ -175,6 +191,16 @@ export async function openAlarmEditor(alarm, data, onSaved) {
     el('label.field', {}, [el('span.field-label', { text: 'Search' }), searchBox]),
     results,
   );
+
+  // The failure mode this prevents: an alarm that wakes the TV, opens Spotify,
+  // and sits in silence — behaving exactly as configured.
+  const noMusic = el('p.sheet-note.warn-note', {
+    text: 'This alarm has no music set — it will wake the Roku and open Spotify, but play nothing.',
+  });
+  const refreshNoMusic = () => { noMusic.hidden = !!uri.value.trim(); };
+  uri.addEventListener('input', refreshNoMusic);
+  refreshNoMusic();
+  body.append(noMusic);
 
   const collect = () => ({
     name: name.value.trim() || 'Alarm',

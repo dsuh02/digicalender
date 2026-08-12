@@ -126,8 +126,23 @@ def run(alarm: dict, *, log=None) -> dict:
         step("Open Spotify", launch)
 
     uri = (alarm.get("spotify_uri") or "").strip()
+
+    # The Connect target defaults to the Roku we just launched on. Two separate
+    # fields for "which Roku" is a trap: picking the stick from the dropdown
+    # while an old name sat in the text box meant launching Spotify on one
+    # device and then hunting for a different one, which fails in a way that
+    # reads like Spotify being broken.
     want_name = (alarm.get("device_name") or "").strip()
-    if not (uri or want_name):
+    if not want_name and device:
+        want_name = device.get("name") or ""
+
+    if not uri:
+        # An alarm with nothing to play opens Spotify and stops. That is
+        # exactly what it was configured to do, which is the worst kind of
+        # bug — so say so rather than reporting success.
+        steps.append({"step": "Start playing", "ok": False,
+                      "detail": "no music chosen for this alarm — set a playlist, "
+                                "album, artist or track", "ms": 0})
         return _finish(steps)
 
     # 4 — wait for the channel to advertise itself to Spotify Connect. It is not
@@ -149,8 +164,11 @@ def run(alarm: dict, *, log=None) -> dict:
                     target["name"] = d.get("name", "")
                     return f"found “{target['name']}”"
             time.sleep(CONNECT_POLL_S)
-        raise RuntimeError("no matching Spotify Connect device appeared"
-                           + (f" (saw: {', '.join(seen) or 'none'})" if seen else ""))
+        raise RuntimeError(
+            f"no Spotify Connect device matching {want_name!r} appeared"
+            + (f" — saw: {', '.join(seen)}" if seen else " — saw none")
+            + (f". Spotify was launched on {device['name']!r}; the Connect name "
+               "usually matches that." if device else ""))
 
     if not step("Find it on Spotify Connect", find_connect):
         return _finish(steps)

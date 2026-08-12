@@ -569,6 +569,3 @@ def set_shuffle(on: bool) -> None:
 def search(q: str, kinds: str = "playlist,album,artist,track", limit: int = 8) -> dict:
     return call("GET", "/search", None, {"q": q, "type": kinds, "limit": limit})
 
-
-def now_playing() -> dict:
-    return call("GET", "/me/player") or {}

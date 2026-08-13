@@ -264,9 +264,22 @@ def call(method: str, path: str, body: dict | None = None, params: dict | None =
     })
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            raw = r.read().decode()
-            # 204 for most player commands — success with nothing to say.
-            return json.loads(raw) if raw.strip() else {}
+            raw = r.read().decode(errors="replace")
+            if not raw.strip():
+                return {}                # 204: success with nothing to say
+            try:
+                return json.loads(raw)
+            except ValueError:
+                # The player endpoints do not reliably return JSON on success —
+                # observed live: pause() came back 2xx with a body that raised
+                # "Extra data: line 1 column 2". The request WORKED; only its
+                # body was unparseable, and no caller of a command endpoint
+                # reads that body anyway.
+                #
+                # Raising here reported successful commands as failures, which
+                # is exactly how an alarm that really did start the music
+                # recorded itself as broken.
+                return {}
     except urllib.error.HTTPError as e:
         detail, code = "", ""
         try:
@@ -320,8 +333,27 @@ def find_device(name_contains: str) -> dict | None:
     return None
 
 
-def transfer(device_id: str, play: bool = False) -> None:
-    call("PUT", "/me/player", {"device_ids": [device_id], "play": play})
+def transfer(device_id: str, play: bool = False, attempts: int = 4) -> None:
+    """Hand playback to a device, tolerating one that has only just appeared.
+
+    A Connect device is listed the moment it registers, but Spotify will 404 a
+    transfer to it for a second or two afterwards. The alarm hits that window
+    every time: it launches the app and hands over as soon as the device shows
+    up. Retrying briefly is the difference between working from cold and only
+    working when the device happened to be registered already.
+    """
+    last = None
+    for i in range(attempts):
+        try:
+            call("PUT", "/me/player", {"device_ids": [device_id], "play": play})
+            return
+        except SpotifyError as e:
+            if e.status not in (404, 202):
+                raise
+            last = e
+            time.sleep(0.8 * (i + 1))
+    if last:
+        raise last
 
 
 def start(device_id: str | None, uri: str = "", shuffle: bool = False) -> None:

@@ -87,6 +87,7 @@ export const NowPlayingWidget = {
     };
 
     let bar = null;
+    let knob = null;
     let elapsed = null;
     let track = null;
     let tone = null;            // {bg, ink, isLight} from the artwork
@@ -162,7 +163,8 @@ export const NowPlayingWidget = {
 
       bar = el('div.np-bar-fill');
       elapsed = el('span.np-time');
-      track = el('div.np-bar', {}, [bar, el('div.np-bar-knob')]);
+      knob = el('div.np-bar-knob');
+      track = el('div.np-bar', {}, [bar, knob]);
 
       // Scrubbing, live only while armed. Pointer capture so a finger that
       // slides off the bar keeps controlling it, and the seek is sent on
@@ -173,7 +175,7 @@ export const NowPlayingWidget = {
         return r.width ? Math.max(0, Math.min(1, (clientX - r.left) / r.width)) : 0;
       };
       const preview = (f) => {
-        bar.style.width = `${f * 100}%`;
+        setFill(f);
         if (elapsed) elapsed.textContent = mmss(f * (t.duration_ms || 0));
       };
       track.addEventListener('pointerdown', (e) => {
@@ -273,12 +275,20 @@ export const NowPlayingWidget = {
       paintProgress();
     };
 
+    /** The fill and the knob are one position, so they move together. Keeping
+     *  them as two separate writes is how the knob stayed at zero. */
+    const setFill = (f) => {
+      const pct = Math.max(0, Math.min(1, f)) * 100;
+      if (bar) bar.style.width = `${pct}%`;
+      if (knob) knob.style.left = `${pct}%`;
+    };
+
     const paintProgress = () => {
       if (!bar || !data || !data.track) return;
       const pos = position();
       const pct = data.track.duration_ms
         ? Math.max(0, Math.min(100, (pos / data.track.duration_ms) * 100)) : 0;
-      bar.style.width = `${pct}%`;
+      setFill(pct / 100);
       if (elapsed) elapsed.textContent = mmss(pos);
       // The local clock will drift past the end; refetch rather than sit there.
       if (data.playing && data.track.duration_ms

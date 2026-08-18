@@ -31,14 +31,13 @@ WHAT IT DOES NOT MODEL
   person actually does when they decide to pay $200 a month, and a declining
   minimum would quietly stretch the payoff by years without the user asking for
   it. Say what you will pay; that is what is projected.
-* **Interest is simple monthly accrual on the whole balance.** Cards compound
-  daily on an average balance and student loans accrue daily on principal only.
-  Over a payoff horizon the gap is small next to the error in the payment you
-  typed.
-* **Multi-loan servicer allocation.** The Aidvantage account is seventeen loans
-  at four rates, and the servicer prorates payments across them by its own
-  rules. It is projected as one balance at the balance-weighted rate, which
-  tracks total paydown closely but will not match any single loan.
+* **Cards are modelled with the same daily simple interest as the loans.** A
+  card really compounds daily on an average daily balance, so this understates a
+  revolving balance slightly. It does not understate the loans, which is where
+  almost all of the money is.
+* **One payment cadence for every debt.** Real accounts fall due on different
+  days; the model pays them all on the same day each month. Over a payoff
+  horizon that is worth days of interest, not months of duration.
 
 Every one of those makes this arithmetic on stated assumptions, not a schedule
 anyone is entitled to hold a servicer to.
@@ -49,6 +48,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
+import loanmodel
 import store
 
 CONFIG_KEY = "finance_debt_plan"
@@ -57,6 +57,14 @@ DEBT_KINDS = ("credit", "loan")
 MAX_MONTHS = 12 * 60            # 60 years: an iteration cap, not a real horizon
 AVALANCHE, SNOWBALL = "avalanche", "snowball"
 STRATEGIES = (AVALANCHE, SNOWBALL)
+
+# The Auto Pay reduction is temporarily 1.00 point rather than the ordinary
+# 0.25, through 30 June 2028 — so rates displayed today step UP 0.75 the day
+# after. Configurable because it is a policy that can change, and because it
+# applies to federal loans on Auto Pay, not to a credit card.
+AUTO_PAY_STEP = date(2028, 7, 1)
+AUTO_PAY_STEP_UP = 0.75
+FEDERAL_SERVICERS = ("aidvantage",)
 
 # Below this, a balance is paid off. Floating point leaves fractions of a cent
 # behind, and `while balance > 0` on those never terminates.
@@ -124,6 +132,27 @@ def _month_add(y: int, m: int, n: int) -> tuple[int, int]:
 
 # ------------------------------------------------------------------- accounts
 
+def _subsidized(program: str) -> bool:
+    return str(program or "").upper().startswith("DLSUB")
+
+
+def _statement_loans(account: dict) -> list[dict]:
+    """The per-loan detail behind an account, from its newest statement.
+
+    Present only for accounts fed by a statement import. When it is there it
+    beats anything the account row can say: seventeen loans at four rates with
+    their own principal, accrued interest and minimum, instead of one blended
+    balance at one blended rate.
+    """
+    ext = account.get("external_id")
+    if not ext:
+        return []
+    st = store.latest_loan_statement("", ext)
+    if not st:
+        return []
+    return store.list_loan_details(st["id"])
+
+
 def _debts() -> tuple[list[dict], list[dict]]:
     """Debt accounts split into (projectable, blocked).
 
@@ -145,6 +174,7 @@ def _debts() -> tuple[list[dict], list[dict]]:
         if acfg.get("enabled") is False:
             continue
 
+        detail = _statement_loans(a)
         apr = acfg.get("apr")
         if apr in (None, ""):
             apr = a.get("apr")
@@ -160,10 +190,22 @@ def _debts() -> tuple[list[dict], list[dict]]:
             "payment": None if payment in (None, "") else round(float(payment), 2),
             "credit_limit": a.get("credit_limit"),
             "next_due": a.get("next_due") or "",
+            "detail": detail,
+            "loan_count": len(detail),
+            # Federal loans on Auto Pay have a scheduled rate increase; a card
+            # does not. Keyed off having statement detail from a federal
+            # servicer rather than guessed from the rate.
+            "federal": bool(detail),
         }
 
+        # A statement supplies the per-loan minimums, so the account is never
+        # blocked for want of a payment it has already stated.
+        if detail:
+            row["payment"] = row["payment"] or round(
+                sum(float(d["current_due"] or 0) for d in detail), 2)
+
         missing = []
-        if row["apr"] is None:
+        if row["apr"] is None and not detail:
             missing.append("apr")
         if not row["payment"]:
             missing.append("payment")
@@ -177,190 +219,229 @@ def _debts() -> tuple[list[dict], list[dict]]:
     return ready, blocked
 
 
-def _order(active: list[dict], strategy: str) -> list[dict]:
-    """Who gets the extra money first."""
-    if strategy == SNOWBALL:
-        return sorted(active, key=lambda d: d["_bal"])          # quickest win
-    return sorted(active, key=lambda d: -d["_apr"])             # cheapest total
+def _build(ready: list[dict], step: date | None) -> tuple[list, float]:
+    """Turn accounts into obligations. Returns (loans, surplus_from_overrides).
 
-
-# ---------------------------------------------------------------- simulation
-
-def simulate(debts: list[dict], extra: float, strategy: str) -> dict:
-    """Run the payoff month by month. Returns per-debt series and totals.
-
-    Each month, in this order: accrue interest, pay every debt its own payment,
-    then hand the surplus to whichever debt the strategy targets. The surplus is
-    the user's extra PLUS the payments of debts already cleared — that rollover
-    is what makes later debts fall faster than earlier ones.
+    An account with statement detail expands into one obligation per loan. An
+    account without it stays a single obligation at its own rate — the honest
+    shape for a credit card, and the only shape available for a loan nobody has
+    uploaded a statement for.
     """
-    state = [{**d, "_bal": d["balance"], "_apr": (d["apr"] or 0) / 100.0 / 12.0,
-              "_pay": d["payment"] or 0.0, "_interest": 0.0,
-              "_paid": 0.0, "_off": None, "values": [round(d["balance"], 2)]}
-             for d in debts]
+    loans, surplus = [], 0.0
+    for d in ready:
+        if d["detail"]:
+            stated = sum(float(x["current_due"] or 0) for x in d["detail"])
+            # Paying more than the bill is an OVERPAYMENT, which the servicer
+            # allocates by its own rules — so the excess joins the surplus pool
+            # rather than inflating each loan's minimum.
+            surplus += max(0.0, (d["payment"] or 0) - stated)
+            for x in d["detail"]:
+                rate = float(x["rate"] or 0)
+                loans.append(loanmodel.Loan(
+                    key=str(d["account_id"]) + ":" + str(x["loan_ref"]),
+                    name=x["loan_ref"],
+                    principal=float(x["unpaid_principal"] or 0),
+                    # The statement splits principal from accrued interest, so
+                    # the model starts from the real split instead of assuming
+                    # the whole balance is principal.
+                    accrued_interest=float(x["unpaid_interest"] or 0),
+                    minimum=float(x["current_due"] or 0),
+                    rates=(loanmodel.auto_pay_schedule(rate, step, AUTO_PAY_STEP_UP)
+                           if d["federal"] else [(None, rate)]),
+                    subsidized=_subsidized(x.get("program")),
+                    group=d["account_id"]))
+        else:
+            loans.append(loanmodel.Loan(
+                key=d["account_id"], name=d["name"],
+                principal=d["balance"], accrued_interest=0.0,
+                minimum=d["payment"] or 0.0,
+                rates=[(None, float(d["apr"] or 0))],
+                subsidized=False, group=d["account_id"]))
+    return loans, round(surplus, 2)
 
-    months_run = 0
-    for step in range(MAX_MONTHS):
-        active = [d for d in state if d["_bal"] > ZERO]
-        if not active:
-            break
 
-        # Freed payments join the pool; a cleared debt keeps contributing.
-        pool = extra + sum(d["_pay"] for d in state if d["_bal"] <= ZERO)
+def _first_payment(ready: list[dict], today: date) -> date:
+    """When the next payment lands.
 
-        for d in active:
-            interest = d["_bal"] * d["_apr"]
-            d["_bal"] += interest
-            d["_interest"] += interest
-            pay = min(d["_pay"], d["_bal"])
-            d["_bal"] -= pay
-            d["_paid"] += pay
+    The earliest real due date still ahead of us, so the first interval charges
+    the days that have actually passed since the balances were true. Falls back
+    to the same day next month when nothing reported one.
+    """
+    dates = []
+    for d in ready:
+        raw = d.get("next_due") or ""
+        try:
+            when = date.fromisoformat(raw[:10])
+        except ValueError:
+            continue
+        if when > today:
+            dates.append(when)
+    if dates:
+        return min(dates)
+    y, m = _month_add(today.year, today.month, 1)
+    return date(y, m, min(today.day, 28))
 
-        for d in _order([d for d in state if d["_bal"] > ZERO], strategy):
-            if pool <= ZERO:
-                break
-            pay = min(pool, d["_bal"])
-            d["_bal"] -= pay
-            d["_paid"] += pay
-            pool -= pay
 
-        cleared = False
-        for d in state:
-            if d["_bal"] <= ZERO:
-                d["_bal"] = 0.0
-                if d["_off"] is None:
-                    d["_off"] = step + 1
-                    cleared = True
-            d["values"].append(round(d["_bal"], 2))
-        months_run = step + 1
-
-        # Nothing went down and nothing was cleared: the only event that can
-        # change these dynamics is a debt being paid off, and none can be. The
-        # balances diverge from here, so stop rather than compounding for sixty
-        # years — that produced a $209 BILLION line and a chart axis to match.
-        shrank = any(d["_bal"] < d["values"][-2] - ZERO for d in active)
-        if not shrank and not cleared:
-            break
-
-    # Anything still owing after the cap does not converge. Reported as such
-    # rather than as a payoff sixty years out, which would be a made-up date.
-    stalled = [d for d in state if d["_bal"] > ZERO]
-    return {
-        "state": state,
-        "months_run": months_run,
-        "stalled": [d["account_id"] for d in stalled],
-        "total_interest": round(sum(d["_interest"] for d in state), 2),
-        "total_paid": round(sum(d["_paid"] for d in state), 2),
-        "payoff_month": None if stalled else months_run,
-    }
+def _monthly_interest(d: dict) -> float:
+    """This month's interest at today's rates — for the underwater check."""
+    if d["detail"]:
+        return sum(float(x["unpaid_principal"] or 0) * float(x["rate"] or 0) / 100.0
+                   for x in d["detail"]) / 12.0
+    return d["balance"] * float(d["apr"] or 0) / 100.0 / 12.0
 
 
 def _underwater(d: dict) -> bool:
-    """True when this month's payment does not even cover this month's interest.
+    """True when the payment does not even cover this month's interest.
 
     Worth calling out on its own: it is true today, it is the reason the debt
     never clears, and unlike the payoff date it is checkable by hand.
     """
-    if not d.get("apr") or not d.get("payment"):
+    if not d.get("payment"):
         return False
-    return d["payment"] <= d["balance"] * (d["apr"] / 100.0 / 12.0) + 1e-9
+    return d["payment"] <= _monthly_interest(d) + 1e-9
 
 
 # --------------------------------------------------------------------- public
 
-def plan(strategy: str | None = None, extra: float | None = None) -> dict:
+def _run(ready: list[dict], extra: float, strategy: str, step, today: date) -> dict:
+    loans, from_overrides = _build(ready, step)
+    monthly = sum(l.minimum for l in loans) + extra + from_overrides
+    return loanmodel.simulate(loans, monthly, today, _first_payment(ready, today),
+                              strategy=strategy)
+
+
+def plan(strategy: str | None = None, extra: float | None = None,
+         auto_pay_step: bool = True) -> dict:
     """The whole payoff picture: series to draw, dates, and what extra buys."""
     cfg = config()
     strategy = strategy if strategy in STRATEGIES else cfg["strategy"]
     extra = cfg["extra"] if extra is None else _clamp_float(extra, 0.0, 1e6, 0.0)
+    step = AUTO_PAY_STEP if auto_pay_step else None
 
     ready, blocked = _debts()
     today = date.today()
+    blocked_balance = round(sum(d["balance"] for d in blocked), 2)
 
     if not ready:
         return {
-            "months": [f"{today.year:04d}-{today.month:02d}"],
-            "series": [], "blocked": blocked, "config": cfg,
+            "months": ["%04d-%02d" % (today.year, today.month)],
+            "series": [], "loans": [], "blocked": blocked, "config": cfg,
             "strategy": strategy, "extra": extra,
             "total_now": 0.0, "total_interest": 0.0, "total_paid": 0.0,
             "payoff_month": None, "debt_free": None, "stalled": [],
-            "minimum_total": 0.0, "assumed": True,
-            "blocked_balance": round(sum(d["balance"] for d in blocked), 2),
+            "minimum_total": 0.0, "monthly_total": 0.0, "assumed": True,
+            "blocked_balance": blocked_balance,
         }
 
-    run = simulate(ready, extra, strategy)
-    # The comparison that makes the extra worth typing: same debts, no extra.
-    base = simulate(ready, 0.0, strategy)
-    # And the road not taken, so the strategy choice is priced rather than
-    # asserted. Snowball is compared against avalanche at the same extra.
+    run = _run(ready, extra, strategy, step, today)
+    base = _run(ready, 0.0, strategy, step, today)
     other_name = SNOWBALL if strategy == AVALANCHE else AVALANCHE
-    other = simulate(ready, extra, other_name)
+    other = _run(ready, extra, other_name, step, today)
+    # What the 2028 reset itself costs, which is invisible unless both are run.
+    no_step = _run(ready, extra, strategy, None, today) if step else run
 
-    n = run["months_run"]
-    months = []
-    y, m = today.year, today.month
-    for _ in range(n + 1):
-        months.append(f"{y:04d}-{m:02d}")
-        y, m = _month_add(y, m, 1)
+    months = [h["date"][:7] for h in run["history"]]
+    base_loans, from_overrides = _build(ready, step)
+    minimum_total = round(sum(l.minimum for l in base_loans), 2)
 
-    def month_of(idx):
-        if idx is None or idx > n:
-            return None
-        return months[idx]
-
+    by_account = {d["account_id"]: d for d in ready}
     series = []
-    for d in run["state"]:
-        # Every series is padded to the same length so the chart's months axis
-        # lines up; a debt cleared in year two is a flat zero after it, not a
-        # short line the chart has to guess the end of.
-        vals = d["values"] + [0.0] * (n + 1 - len(d["values"]))
-        src = next(x for x in ready if x["account_id"] == d["account_id"])
+    for aid, d in by_account.items():
+        values = [round(h["by_group"].get(aid, 0.0), 2) for h in run["history"]]
+        mine = [l for l in run["loans"] if l.group == aid]
+        stalled = any(l.active() for l in mine)
+        cleared = [l.cleared_on for l in mine if l.cleared_on]
+        payoff = None if stalled or not cleared else max(cleared)
+        idx = None
+        if payoff:
+            key = payoff.isoformat()
+            idx = next((i for i, h in enumerate(run["history"]) if h["date"] == key), None)
         series.append({
-            "account_id": d["account_id"], "name": d["name"],
-            "institution": d["institution"], "kind": d["kind"],
-            "apr": d["apr"], "payment": d["payment"],
-            "start_balance": d["balance"], "values": vals[:n + 1],
-            "interest": round(d["_interest"], 2),
-            "paid": round(d["_paid"], 2),
-            "payoff_index": d["_off"],
-            "payoff_month": month_of(d["_off"]),
-            "stalled": d["account_id"] in run["stalled"],
-            "underwater": _underwater(src),
+            "account_id": aid, "name": d["name"], "institution": d["institution"],
+            "kind": d["kind"], "apr": d["apr"], "payment": d["payment"],
+            "start_balance": d["balance"], "values": values,
+            "loan_count": d["loan_count"],
+            "interest": round(sum(l.paid_interest for l in mine), 2),
+            "paid": round(sum(l.paid_interest + l.paid_principal for l in mine), 2),
+            "payoff_index": idx,
+            "payoff_month": payoff.isoformat()[:7] if payoff else None,
+            "payoff_date": payoff.isoformat() if payoff else None,
+            "stalled": stalled,
+            "underwater": _underwater(d),
         })
-    # Payoff order, soonest first; the ones that never clear go last.
     series.sort(key=lambda s: (s["payoff_index"] is None,
                                s["payoff_index"] or 0, -s["start_balance"]))
 
-    saved_months = (None if base["payoff_month"] is None or run["payoff_month"] is None
-                    else base["payoff_month"] - run["payoff_month"])
+    # Per-loan payoff, for the accounts that have real loans behind them.
+    later = date(AUTO_PAY_STEP.year + 1, 1, 1)
+    loans_out = []
+    for l in sorted(run["loans"], key=lambda x: (x.cleared_on or date.max, x.name)):
+        loans_out.append({
+            "key": l.key, "name": l.name, "account_id": l.group,
+            "rate": loanmodel.rate_at(l.rates, today),
+            "rate_after_step": loanmodel.rate_at(l.rates, later),
+            "minimum": round(l.minimum, 2),
+            "start_balance": round(l.paid_principal + l.principal, 2),
+            "interest": round(l.paid_interest, 2),
+            "subsidized": l.subsidized,
+            "payoff_date": l.cleared_on.isoformat() if l.cleared_on else None,
+            "stalled": l.active(),
+        })
+
+    saved = (None if base["payoff_date"] is None or run["payoff_date"] is None
+             else base["payments"] - run["payments"])
 
     return {
         "months": months,
         "series": series,
+        "loans": loans_out,
         "blocked": blocked,
-        "blocked_balance": round(sum(d["balance"] for d in blocked), 2),
+        "blocked_balance": blocked_balance,
         "config": cfg,
         "strategy": strategy,
         "extra": extra,
-        "minimum_total": round(sum(d["payment"] or 0 for d in ready), 2),
-        "monthly_total": round(sum(d["payment"] or 0 for d in ready) + extra, 2),
+        "minimum_total": minimum_total,
+        "monthly_total": round(minimum_total + extra + from_overrides, 2),
         "total_now": round(sum(d["balance"] for d in ready), 2),
         "total_interest": run["total_interest"],
         "total_paid": run["total_paid"],
-        "payoff_month": run["payoff_month"],
-        "debt_free": month_of(run["payoff_month"]),
-        "stalled": run["stalled"],
+        "payments": run["payments"],
+        "final_payment": run["final_payment"],
+        "payoff_month": None if not run["cleared"] else len(months) - 1,
+        "debt_free": run["payoff_date"][:7] if run["payoff_date"] else None,
+        "debt_free_date": run["payoff_date"],
+        "stalled": sorted({l.group for l in run["loans"] if l.active()}),
         "extra_effect": {
-            "months_saved": saved_months,
+            "months_saved": saved,
             "interest_saved": round(base["total_interest"] - run["total_interest"], 2),
             "baseline_interest": base["total_interest"],
-            "baseline_payoff": base["payoff_month"],
+            "baseline_payoff": base["payoff_date"],
         },
         "alternative": {
             "strategy": other_name,
-            "months": other["payoff_month"],
+            "months": other["payments"] if other["cleared"] else None,
             "interest": other["total_interest"],
             "interest_delta": round(other["total_interest"] - run["total_interest"], 2),
+        },
+        # The scheduled Auto Pay reset, priced. Only meaningful when a federal
+        # loan is in the plan; otherwise both runs are identical and it is zero.
+        "auto_pay_reset": {
+            "step_date": AUTO_PAY_STEP.isoformat(),
+            "step_up": AUTO_PAY_STEP_UP,
+            "applies": any(d["federal"] for d in ready),
+            "extra_interest": round(run["total_interest"] - no_step["total_interest"], 2),
+            "months_later": (run["payments"] - no_step["payments"]
+                             if run["cleared"] and no_step["cleared"] else None),
+            "payoff_without": no_step["payoff_date"],
+        },
+        "method": {
+            "basis": "daily simple interest on unpaid principal, 365.25 days",
+            "allocation": ("minimums first, then surplus to the highest rate, "
+                           "unsubsidised before subsidised at a tie"
+                           if strategy == AVALANCHE else
+                           "minimums first, then surplus to the smallest balance"),
+            "first_payment": _first_payment(ready, today).isoformat(),
+            "loan_level": sum(1 for d in ready if d["detail"]),
         },
         "assumed": True,        # never let the UI present this as a schedule
     }

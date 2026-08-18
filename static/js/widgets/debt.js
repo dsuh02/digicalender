@@ -248,12 +248,21 @@ export const DebtPayoffWidget = {
   },
 };
 
-/** The caveat line. Always names what is NOT in the chart. */
+/** The caveat line. States the method, and always names what is NOT in it. */
 function planNote(data) {
   const bits = [];
-  bits.push(`${data.strategy === 'snowball' ? 'Snowball' : 'Avalanche'}`
-          + `, paying ${money(data.monthly_total)}/mo`
-          + `${data.extra ? ` (${money(data.extra)} extra)` : ''}.`);
+  const m = data.method || {};
+  bits.push(`${money(data.monthly_total)}/mo`
+          + `${data.extra ? ` (${money(data.extra)} extra)` : ''}`
+          + `${m.loan_level ? `, simulated loan by loan` : ''}`
+          + `${m.basis ? ` on ${m.basis}` : ''}.`);
+  const r = data.auto_pay_reset;
+  if (r && r.applies && r.extra_interest > 0) {
+    // The single least visible fact in the whole projection: today's rate is
+    // temporarily reduced, and the payoff already assumes it goes back up.
+    bits.push(`Includes the Auto Pay reduction dropping back on `
+            + `${r.step_date}, which adds ${money(r.extra_interest)} of interest.`);
+  }
   if (data.blocked && data.blocked.length) {
     bits.push(`${money(data.blocked_balance)} across ${data.blocked.length} `
             + `debt${data.blocked.length === 1 ? '' : 's'} is NOT included — `
@@ -323,6 +332,13 @@ export const DebtFreeWidget = {
 
         // What the extra actually buys is the whole reason to type one in.
         const eff = data.extra_effect || {};
+        const reset = data.auto_pay_reset;
+        if (h > 260 * k && reset && reset.applies && reset.extra_interest > 0) {
+          wrap.append(el('div.debtfree-blocked', {
+            text: `Rate reduction ends ${reset.step_date}: `
+                + `+${priv.cash(reset.extra_interest)} interest`,
+          }));
+        }
         if (h > 190 * k && data.extra > 0 && eff.months_saved) {
           wrap.append(el('div.debtfree-saved', {
             text: `${money(data.extra)}/mo extra saves ${durationLabel(eff.months_saved)}`
@@ -364,6 +380,11 @@ export const DebtListWidget = {
   type: 'debt_list', name: 'Debts', icon: 'list', category: 'Money',
   defaultSize: { w: 14, h: 12 }, minSize: { w: 4, h: 4 },
   settings: [
+    { key: 'scope', label: 'Show', type: 'select', default: 'accounts',
+      options: [
+        { value: 'accounts', label: 'One row per account' },
+        { value: 'loans', label: 'Every individual loan' },
+      ] },
     { key: 'sort', label: 'Order', type: 'select', default: 'payoff',
       options: [
         { value: 'payoff', label: 'Payoff order' },
@@ -386,7 +407,17 @@ export const DebtListWidget = {
     };
 
     const ordered = () => {
-      const rows = [...(data.series || [])];
+      const loanMode = ctx.settings.scope === 'loans';
+      // Individual loans carry `rate`; accounts carry `apr`. Normalised here so
+      // one row renderer serves both rather than branching in three places.
+      const rows = loanMode
+        ? (data.loans || []).map(l => ({
+            ...l, apr: l.rate, payment: l.minimum,
+            institution: l.subsidized ? 'Subsidised' : 'Unsubsidised',
+            payoff_month: l.payoff_date ? l.payoff_date.slice(0, 7) : null,
+            payoff_index: null,
+          }))
+        : [...(data.series || [])];
       const by = ctx.settings.sort || 'payoff';
       if (by === 'rate') rows.sort((a, b) => (b.apr || 0) - (a.apr || 0));
       else if (by === 'balance') rows.sort((a, b) => b.start_balance - a.start_balance);
@@ -408,7 +439,7 @@ export const DebtListWidget = {
         clear(holder);
         const list = el('div.loans-list.debt-list');
         const rows = ordered();
-        const blocked = data.blocked || [];
+        const blocked = ctx.settings.scope === 'loans' ? [] : (data.blocked || []);
         const room = Math.max(1, Math.floor(h / (42 * k)));
         const shown = [...rows, ...blocked].slice(0, room);
 
@@ -429,7 +460,11 @@ export const DebtListWidget = {
             el('div.debt-when', {}, [
               el(`div.debt-when-date${isBlocked || s.stalled ? '.warn' : ''}`, { text: when }),
               el('div.loans-row-note', {
-                text: isBlocked || s.stalled ? '' : durationLabel(s.payoff_index),
+                text: isBlocked || s.stalled ? ''
+                  : s.payoff_index !== null && s.payoff_index !== undefined
+                    ? durationLabel(s.payoff_index)
+                    : (s.rate_after_step && s.rate_after_step !== s.rate
+                        ? `then ${Number(s.rate_after_step).toFixed(2)}%` : ''),
               }),
             ]),
             el('div.loans-row-amount', { text: priv.cash(s.start_balance ?? s.balance) }),

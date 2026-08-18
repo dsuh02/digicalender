@@ -1227,7 +1227,9 @@ class Handler(BaseHTTPRequestHandler):
                     extra = float(raw) if raw else None
                 except ValueError:
                     raise ApiError(400, "extra must be a number")
-                return self._json(200, debt_plan.plan(strategy=strat, extra=extra))
+                step = (qs.get("reset") or ["1"])[0] not in ("0", "false", "no")
+                return self._json(200, debt_plan.plan(strategy=strat, extra=extra,
+                                                      auto_pay_step=step))
             if method == "POST":
                 return self._json(200, {"config": debt_plan.set_config(self._body())})
             raise ApiError(405, "method not allowed")

@@ -439,7 +439,7 @@ def plan(strategy: str | None = None, extra: float | None = None,
             "payoff_without": no_step["payoff_date"],
         },
         "method": {
-            "basis": "daily simple interest on unpaid principal, 365.25 days",
+            "basis": "daily simple interest on unpaid principal over 365.25 days",
             "allocation": ("minimums first, then surplus to the highest rate, "
                            "unsubsidised before subsidised at a tie"
                            if strategy == AVALANCHE else

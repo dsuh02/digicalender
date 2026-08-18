@@ -254,8 +254,8 @@ function planNote(data) {
   const m = data.method || {};
   bits.push(`${money(data.monthly_total)}/mo`
           + `${data.extra ? ` (${money(data.extra)} extra)` : ''}`
-          + `${m.loan_level ? `, simulated loan by loan` : ''}`
-          + `${m.basis ? ` on ${m.basis}` : ''}.`);
+          + `${m.loan_level ? ', simulated loan by loan' : ''}`
+          + `${m.basis ? `, ${m.basis}` : ''}.`);
   const r = data.auto_pay_reset;
   if (r && r.applies && r.extra_interest > 0) {
     // The single least visible fact in the whole projection: today's rate is

@@ -458,7 +458,10 @@ def _sync_account(st: dict) -> str | None:
         "item_id": item["id"], "external_id": number,
         "name": "Student loans", "official_name": "Aidvantage federal loans",
         "institution": INSTITUTION, "kind": "loan", "subtype": "student",
-        "mask": number[-4:], "balance": st["current_balance"],
+        # Last four DIGITS, not last four characters: the account number carries
+        # a billing-group suffix, so a plain slice masks it as "36-1".
+        "mask": re.sub(r"\D", "", number)[-4:],
+        "balance": st["current_balance"],
         "apr": _weighted_rate(st["loans"]), "min_payment": st["current_due"],
         "next_due": st["due_date"] or None,
     }

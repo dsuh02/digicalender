@@ -1249,6 +1249,10 @@ class Handler(BaseHTTPRequestHandler):
             if n <= 0:
                 raise ApiError(400, "no file was uploaded")
             if n > MAX_STATEMENT_BYTES:
+                # Refusing without reading leaves the body in the socket, and on
+                # a keep-alive connection the next parse starts mid-PDF and
+                # reports a nonsense 400. Close instead of leaving that behind.
+                self.close_connection = True
                 raise ApiError(413, "statement is larger than 25 MB")
             name = _safe_filename(unquote(self.headers.get("X-Filename",
                                                            "statement.pdf")))
@@ -1573,7 +1577,6 @@ class Handler(BaseHTTPRequestHandler):
             if method == "POST":
                 # Raw body upload: one request per file, filename in a header.
                 # Multipart buys nothing here and costs a parser.
-                from urllib.parse import unquote
                 n = int(self.headers.get("Content-Length") or 0)
                 if n <= 0:
                     raise ApiError(400, "empty upload")

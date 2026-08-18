@@ -25,6 +25,7 @@ import {
 import { contentScale } from './core/scale.js';
 import { DAY_LABELS, openAlarmEditor, showAlarmRun } from './core/alarmui.js';
 import { clamp, clear, debounce, el } from './core/util.js';
+import { statementUploader } from './widgets/loans.js';
 import { initials } from './widgets/people.js';
 import { CATEGORIES, WIDGETS, widgetDef } from './widgets/index.js';
 
@@ -1052,6 +1053,37 @@ async function renderMoney() {
     envSel.append(o);
   });
 
+  // Loan statements. Some servicers have dropped Plaid entirely, so the monthly
+  // PDF is the only way their loans get in at all.
+  const stmtList = el('div.dev-list');
+  const paintStatements = async () => {
+    clear(stmtList);
+    let held = { statements: [] };
+    try { held = await api.loans(); }
+    catch (e) { stmtList.append(el('p.sheet-note', { text: e.message })); return; }
+    if (!held.statements.length) {
+      stmtList.append(el('p.sheet-note', { text: 'No statements uploaded yet.' }));
+      return;
+    }
+    held.statements.forEach(s => stmtList.append(el('div.dev-row', {}, [
+      el('div.dev-main', {}, [
+        el('div.dev-name', { text: `${s.institution || s.servicer} · ${s.statement_date}` }),
+        el('div.dev-meta', {
+          text: [`${moneyFmt(s.current_balance)} balance`,
+                 s.period_start ? `${s.period_start} → ${s.period_end}` : null,
+                 s.due_date ? `due ${s.due_date}` : null].filter(Boolean).join(' · '),
+        }),
+      ]),
+      el('button.btn.btn-small', {
+        text: 'Remove', onclick: async () => {
+          try { await api.deleteLoanStatement(s.id); } catch (e) { toast(e.message, true); }
+          paintStatements();
+        },
+      }),
+    ])));
+  };
+  paintStatements();
+
   const linkStatus = el('p.sheet-note');
   let polling = null;
 
@@ -1128,6 +1160,13 @@ async function renderMoney() {
     ]),
     el('p.sheet-note', {
       text: 'Add anything Plaid can’t reach by hand — balances you type are tracked over time the same way, and a due day puts it on the calendar.',
+    }),
+
+    el('h3.form-section', { text: 'Loan statements' }),
+    stmtList,
+    statementUploader(paintStatements),
+    el('p.sheet-note', {
+      text: 'For servicers that don’t support Plaid. Upload the monthly PDF and it is read, checked against its own totals, and added — one statement per month. Uploading a month again replaces it.',
     }),
 
     el('h3.form-section', { text: 'Plaid credentials' }),

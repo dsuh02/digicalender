@@ -256,6 +256,83 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ftx_external
     ON finance_transactions(item_id, external_id) WHERE external_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ftx_date ON finance_transactions(posted_on DESC);
 
+-- ------------------------------------------------------------ loan statements
+--
+-- Servicers that have left Plaid still send a monthly PDF, and that statement
+-- is the only record of these loans there is. One row per statement, one
+-- loan_details row per loan on it.
+--
+-- This is an APPEND-ONLY ARCHIVE, not a mirror of a live balance. Each row is
+-- what the servicer said on one date and stays true forever, which is why the
+-- per-loan figures are stored per statement rather than being overwritten on a
+-- table of current loans: the month-over-month series is the entire value of
+-- having them. Watching one loan's interest rate move between two statements is
+-- something no "current balance" table can answer.
+--
+-- The unique index is on (servicer, account_number, statement_date) because a
+-- month is the natural key here. Re-uploading the same PDF, or a corrected one
+-- for a month already held, replaces that month rather than adding a second.
+CREATE TABLE IF NOT EXISTS loan_statements (
+    id                 TEXT PRIMARY KEY,
+    account_id         TEXT REFERENCES finance_accounts(id) ON DELETE SET NULL,
+    servicer           TEXT NOT NULL DEFAULT 'aidvantage',
+    institution        TEXT NOT NULL DEFAULT '',
+    account_number     TEXT NOT NULL,
+    statement_date     TEXT NOT NULL,
+    period_start       TEXT NOT NULL DEFAULT '',
+    period_end         TEXT NOT NULL DEFAULT '',
+    due_date           TEXT NOT NULL DEFAULT '',
+    current_balance    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    unpaid_principal   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    unpaid_interest    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    original_principal DOUBLE PRECISION NOT NULL DEFAULT 0,
+    current_due        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    past_due           DOUBLE PRECISION NOT NULL DEFAULT 0,
+    total_due          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    paid_since_last    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    applied_interest   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    applied_principal  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    autopay            BOOLEAN NOT NULL DEFAULT FALSE,
+    autopay_amount     DOUBLE PRECISION,
+    autopay_date       TEXT NOT NULL DEFAULT '',
+    source_name        TEXT NOT NULL DEFAULT '',
+    source_sha256      TEXT NOT NULL DEFAULT '',
+    imported_at        TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lstmt_month
+    ON loan_statements(servicer, account_number, statement_date);
+CREATE INDEX IF NOT EXISTS idx_lstmt_date ON loan_statements(statement_date DESC);
+
+CREATE TABLE IF NOT EXISTS loan_details (
+    id                   TEXT PRIMARY KEY,
+    statement_id         TEXT NOT NULL REFERENCES loan_statements(id) ON DELETE CASCADE,
+    loan_ref             TEXT NOT NULL,
+    position             INTEGER NOT NULL DEFAULT 0,
+    program              TEXT NOT NULL DEFAULT '',
+    rate                 DOUBLE PRECISION,
+    rate_type            TEXT NOT NULL DEFAULT '',
+    opened_on            TEXT NOT NULL DEFAULT '',
+    current_balance      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    unpaid_principal     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    unpaid_interest      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    original_principal   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    capitalized_interest DOUBLE PRECISION NOT NULL DEFAULT 0,
+    principal_reduction  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    life_payments        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    principal_paid       DOUBLE PRECISION NOT NULL DEFAULT 0,
+    interest_paid        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    payments_received    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    applied_interest     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    applied_principal    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    returned_check_fee   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    last_payment_on      TEXT NOT NULL DEFAULT '',
+    current_due          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    past_due             DOUBLE PRECISION NOT NULL DEFAULT 0,
+    total_due            DOUBLE PRECISION NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ldet_loan
+    ON loan_details(statement_id, loan_ref);
+
 -- ---------------------------------------------------------------- pipeline
 --
 -- Background work that produces data other work depends on.
@@ -496,7 +573,7 @@ def new_uid() -> str:
     return uuid.uuid4().hex
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def _dedupe_finance_items() -> None:
@@ -565,6 +642,10 @@ def init_db() -> None:
     if row["version"] < 10:
         # v10: lyrics cache — created by SCHEMA above; only the version moves.
         q("UPDATE schema_version SET version = 10")
+    if row["version"] < 11:
+        # v11: loan statements + per-loan detail — created by SCHEMA above;
+        # only the version moves.
+        q("UPDATE schema_version SET version = 11")
 
 
 # --------------------------------------------------------------------- events
@@ -1086,7 +1167,13 @@ FINANCE_FIELDS = ("name", "official_name", "institution", "kind", "subtype", "ma
                   "due_day", "next_due", "color", "position")
 
 
-def create_finance_account(data: dict) -> dict:
+def create_finance_account(data: dict, history: bool = True) -> dict:
+    """`history=False` for callers that supply their own dated points.
+
+    A statement import knows the date its balance belongs to; the automatic
+    point here is stamped `now`, and the two together would put an extra reading
+    on the chart dated today with an old statement's balance on it.
+    """
     aid = new_uid()
     ts = now_iso()
     q("""INSERT INTO finance_accounts (id, item_id, external_id, name, official_name,
@@ -1101,11 +1188,12 @@ def create_finance_account(data: dict) -> dict:
        data.get("available"), data.get("credit_limit"), data.get("apr"),
        data.get("min_payment"), data.get("due_day"), data.get("next_due"),
        data.get("color", "") or "", int(data.get("position") or 0), ts, ts))
-    add_finance_history(aid, float(data.get("balance") or 0))
+    if history:
+        add_finance_history(aid, float(data.get("balance") or 0))
     return get_finance_account(aid)
 
 
-def update_finance_account(aid: str, data: dict) -> dict | None:
+def update_finance_account(aid: str, data: dict, history: bool = True) -> dict | None:
     prev = get_finance_account(aid)
     if not prev:
         return None
@@ -1123,7 +1211,8 @@ def update_finance_account(aid: str, data: dict) -> dict | None:
     vals += [now_iso(), aid]
     q(f"UPDATE finance_accounts SET {', '.join(sets)} WHERE id = %s", vals)
     # History only on a real move, so a rename doesn't fake a data point.
-    if "balance" in data and float(data["balance"] or 0) != float(prev["balance"] or 0):
+    if history and "balance" in data \
+            and float(data["balance"] or 0) != float(prev["balance"] or 0):
         add_finance_history(aid, float(data["balance"] or 0))
     return get_finance_account(aid)
 
@@ -1272,6 +1361,147 @@ def finance_recent_transactions(limit: int = 25) -> list[dict]:
                 LEFT JOIN finance_accounts a ON t.account_id = a.id
                 ORDER BY t.posted_on DESC, t.created_at DESC LIMIT %s""",
              (limit,), fetch="all")
+
+
+# --------------------------------------------------------- loan statements
+
+LOAN_STATEMENT_FIELDS = (
+    "account_id", "servicer", "institution", "account_number", "statement_date",
+    "period_start", "period_end", "due_date", "current_balance",
+    "unpaid_principal", "unpaid_interest", "original_principal", "current_due",
+    "past_due", "total_due", "paid_since_last", "applied_interest",
+    "applied_principal", "autopay", "autopay_amount", "autopay_date",
+    "source_name", "source_sha256")
+
+LOAN_DETAIL_FIELDS = (
+    "loan_ref", "position", "program", "rate", "rate_type", "opened_on",
+    "current_balance", "unpaid_principal", "unpaid_interest",
+    "original_principal", "capitalized_interest", "principal_reduction",
+    "life_payments", "principal_paid", "interest_paid", "payments_received",
+    "applied_interest", "applied_principal", "returned_check_fee",
+    "last_payment_on", "current_due", "past_due", "total_due")
+
+_TEXT_LOAN_FIELDS = {"loan_ref", "program", "rate_type", "opened_on",
+                     "last_payment_on"}
+
+
+def create_loan_statement(data: dict) -> dict:
+    """Insert one statement and all of its loans, together.
+
+    Both writes go in one EXPLICIT transaction. The connection is autocommit, so
+    a cursor block alone would commit the statement row and then, if the loans
+    failed, leave a balance with nothing behind it — and every later import
+    would happily stack on top of that.
+    """
+    sid = new_uid()
+    cols = ", ".join(LOAN_STATEMENT_FIELDS)
+    marks = ", ".join(["%s"] * len(LOAN_STATEMENT_FIELDS))
+    c = conn()
+    with c.transaction(), c.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO loan_statements (id, {cols}, imported_at) "
+            f"VALUES (%s, {marks}, %s)",
+            [sid] + [data.get(f) for f in LOAN_STATEMENT_FIELDS] + [now_iso()])
+        dcols = ", ".join(LOAN_DETAIL_FIELDS)
+        dmarks = ", ".join(["%s"] * len(LOAN_DETAIL_FIELDS))
+        for n, loan in enumerate(data.get("loans") or []):
+            vals = []
+            for f in LOAN_DETAIL_FIELDS:
+                v = loan.get(f)
+                if f == "position":
+                    v = n
+                elif f in _TEXT_LOAN_FIELDS:
+                    v = v or ""
+                elif f != "rate":
+                    v = float(v or 0)   # rate stays NULL when unstated
+                vals.append(v)
+            cur.execute(
+                f"INSERT INTO loan_details (id, statement_id, {dcols}) "
+                f"VALUES (%s, %s, {dmarks})", [new_uid(), sid] + vals)
+    return get_loan_statement(sid)
+
+
+def get_loan_statement(sid: str) -> dict | None:
+    return q("SELECT * FROM loan_statements WHERE id = %s", (sid,), fetch="one")
+
+
+def find_loan_statement(servicer: str, account_number: str,
+                        statement_date: str) -> dict | None:
+    return q("""SELECT * FROM loan_statements
+                WHERE servicer = %s AND account_number = %s
+                  AND statement_date = %s""",
+             (servicer, account_number, statement_date), fetch="one")
+
+
+def list_loan_statements(servicer: str = "", account_number: str = "",
+                         limit: int = 240) -> list[dict]:
+    where, args = [], []
+    if servicer:
+        where.append("servicer = %s")
+        args.append(servicer)
+    if account_number:
+        where.append("account_number = %s")
+        args.append(account_number)
+    sql = "SELECT * FROM loan_statements"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    args.append(limit)
+    return q(sql + " ORDER BY statement_date DESC LIMIT %s", args, fetch="all")
+
+
+def latest_loan_statement(servicer: str = "",
+                          account_number: str = "") -> dict | None:
+    rows = list_loan_statements(servicer, account_number, limit=1)
+    return rows[0] if rows else None
+
+
+def latest_loan_statement_date(account_number: str) -> str | None:
+    row = q("""SELECT max(statement_date) AS d FROM loan_statements
+               WHERE account_number = %s""", (account_number,), fetch="one")
+    return (row or {}).get("d")
+
+
+def list_loan_details(sid: str) -> list[dict]:
+    return q("SELECT * FROM loan_details WHERE statement_id = %s ORDER BY position",
+             (sid,), fetch="all")
+
+
+def loan_series(account_number: str, loan_ref: str = "") -> list[dict]:
+    """One loan's figures across every statement held, oldest first.
+
+    With no `loan_ref` this is the whole account's month-by-month history, which
+    is what the charts draw.
+    """
+    if loan_ref:
+        return q("""SELECT s.statement_date, d.*
+                    FROM loan_details d JOIN loan_statements s
+                      ON d.statement_id = s.id
+                    WHERE s.account_number = %s AND d.loan_ref = %s
+                    ORDER BY s.statement_date""",
+                 (account_number, loan_ref), fetch="all")
+    return q("""SELECT statement_date, current_balance, unpaid_principal,
+                       unpaid_interest, current_due, paid_since_last,
+                       applied_interest, applied_principal
+                FROM loan_statements WHERE account_number = %s
+                ORDER BY statement_date""", (account_number,), fetch="all")
+
+
+def delete_loan_statement(sid: str) -> bool:
+    return q("DELETE FROM loan_statements WHERE id = %s", (sid,)) > 0
+
+
+def add_finance_history_at(aid: str, balance: float, at: str) -> None:
+    """A history point stamped with a date you choose, not with now.
+
+    Importing a back catalogue of statements is exactly the case `now_iso()`
+    gets wrong: six months of balances would all land at this afternoon, and the
+    balance chart would show a vertical line instead of six months of paydown.
+    Replaces any existing point at the same instant so a re-import does not
+    double up.
+    """
+    q("DELETE FROM finance_history WHERE account_id = %s AND at = %s", (aid, at))
+    q("INSERT INTO finance_history (id, account_id, balance, at) VALUES (%s,%s,%s,%s)",
+      (new_uid(), aid, float(balance), at))
 
 
 # ------------------------------------------------------------------ alarms

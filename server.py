@@ -21,7 +21,7 @@ import sys
 import traceback
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import alarms as alarm_engine
 import devices as device_registry
@@ -30,6 +30,7 @@ import finance
 import gemini
 import hub
 import ics
+import loans as loan_statements
 import lyrics as lyrics_api
 import mail as mail_client
 import pipeline
@@ -50,6 +51,9 @@ GALLERY_DIR = os.path.join(HERE, "galleries")
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
+# A statement is a few hundred KB. The cap is generous enough for a scanned one
+# and small enough that a wrong file cannot be streamed into memory.
+MAX_STATEMENT_BYTES = 25 * 1024 * 1024
 
 ID_RE = r"([A-Za-z0-9_-]{1,64})"
 
@@ -1234,6 +1238,60 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 limit = 25
             return self._json(200, {"transactions": store.finance_recent_transactions(limit)})
+
+        # ------------------------------------------------ loan statements
+        #
+        # Uploaded as a raw body with the name in a header, the same way gallery
+        # images are: multipart/form-data would mean hand-rolling a MIME parser
+        # for a form with exactly one field in it.
+        if path == "/api/finance/loans/upload" and method == "POST":
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0:
+                raise ApiError(400, "no file was uploaded")
+            if n > MAX_STATEMENT_BYTES:
+                raise ApiError(413, "statement is larger than 25 MB")
+            name = _safe_filename(unquote(self.headers.get("X-Filename",
+                                                           "statement.pdf")))
+            data = b""
+            while len(data) < n:
+                chunk = self.rfile.read(min(1 << 20, n - len(data)))
+                if not chunk:
+                    break
+                data += chunk
+            try:
+                out = loan_statements.import_statement(data, name)
+            except loan_statements.StatementError as e:
+                # 422, not 400: the upload arrived intact and was understood —
+                # it is the CONTENT that could not be trusted, and the message
+                # says exactly which figures disagreed.
+                raise ApiError(422, str(e))
+            hub.bus.publish("finance_changed", {})
+            return self._json(201, out)
+
+        if path == "/api/finance/loans" and method == "GET":
+            number = (qs.get("account") or [""])[0]
+            statements = store.list_loan_statements("", number)
+            latest = statements[0] if statements else None
+            return self._json(200, {
+                "statements": statements,
+                "latest": latest,
+                "loans": store.list_loan_details(latest["id"]) if latest else [],
+                "series": store.loan_series(latest["account_number"]) if latest else [],
+            })
+
+        m = re.fullmatch(rf"/api/finance/loans/{ID_RE}", path)
+        if m:
+            st = store.get_loan_statement(m.group(1))
+            if not st:
+                raise ApiError(404, "statement not found")
+            if method == "GET":
+                return self._json(200, {"statement": st,
+                                        "loans": store.list_loan_details(st["id"])})
+            if method == "DELETE":
+                store.delete_loan_statement(st["id"])
+                hub.bus.publish("finance_changed", {})
+                return self._json(200, {"deleted": True})
+            raise ApiError(405, "method not allowed")
 
         if path == "/api/finance/sync" and method == "POST":
             results = finance.sync_all()

@@ -7,6 +7,7 @@ import { AccountsWidget, BillsWidget, NetWorthWidget } from './finance.js';
 import { GalleryWidget } from './gallery.js';
 import { CashflowWidget, CreditWidget, NetWorthChartWidget, SpendingWidget } from './insights.js';
 import { DeviceGridWidget, MediaWidget, RokuRemoteWidget, ScenesWidget } from './home.js';
+import { LoansWidget } from './loans.js';
 import { ClockWidget, LabelWidget, WeatherWidget } from './info.js';
 import { LyricsWidget, NowPlayingWidget, TopMusicWidget, UpNextWidget } from './music.js';
 import { GreetingWidget, PeopleWidget } from './people.js';
@@ -18,7 +19,7 @@ export const WIDGETS = [
   ClockWidget, GreetingWidget, WeatherWidget, LabelWidget, GalleryWidget, PeopleWidget,
   TodoWidget, NotificationsWidget,
   NetWorthWidget, NetWorthChartWidget, AccountsWidget, BillsWidget,
-  SpendingWidget, CashflowWidget, CreditWidget, ProjectionWidget,
+  SpendingWidget, CashflowWidget, CreditWidget, ProjectionWidget, LoansWidget,
   DeviceGridWidget, ScenesWidget, RokuRemoteWidget, MediaWidget, AlarmsWidget,
   NowPlayingWidget, UpNextWidget, TopMusicWidget, LyricsWidget,
 ];

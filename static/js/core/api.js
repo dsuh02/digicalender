@@ -101,6 +101,26 @@ export const api = {
   updateFinanceAccount: (id, d) => req(`/api/finance/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.account),
   deleteFinanceAccount: id => req(`/api/finance/accounts/${id}`, { method: 'DELETE' }),
 
+  // loan statements (PDF upload — the servicer has no API)
+  loans: (account = '') => req(`/api/finance/loans${account ? `?account=${encodeURIComponent(account)}` : ''}`),
+  loanStatement: id => req(`/api/finance/loans/${id}`),
+  deleteLoanStatement: id => req(`/api/finance/loans/${id}`, { method: 'DELETE' }),
+  uploadStatement: async (file) => {
+    const res = await fetch('/api/finance/loans/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'application/pdf',
+        'X-Filename': encodeURIComponent(file.name || 'statement.pdf'),
+      },
+      body: file,
+    });
+    const body = await res.json().catch(() => null);
+    // The server's rejection message names the figures that disagreed, so it is
+    // passed through verbatim rather than flattened to "upload failed".
+    if (!res.ok) throw new Error((body && body.error) || `upload failed (${res.status})`);
+    return body;
+  },
+
   // mail
   mail: () => req('/api/mail'),
   createMailAccount: d => req('/api/mail', { method: 'POST', body: JSON.stringify(d) }).then(r => r.account),

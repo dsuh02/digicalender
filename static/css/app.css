@@ -1195,3 +1195,73 @@ body.wall .grid { gap: 4px; }
   display: grid; place-items: center; height: 100%; min-height: 60px;
   color: var(--text-3); font-size: 14px; text-align: center; padding: 12px; line-height: 1.5;
 }
+
+/* ------------------------------------------------------------ loans --- */
+
+.loans { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.loans-holder { flex: 1 1 auto; min-height: 0; display: flex; }
+.loans-body { width: 100%; height: 100%; display: flex; flex-direction: column;
+              gap: calc(9px * var(--ui-scale)); overflow: hidden; }
+
+.loans-head { flex: none; }
+.loans-total { font-size: calc(30px * var(--ui-scale)); font-weight: 650;
+               line-height: 1.05; letter-spacing: -0.02em;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.loans-sub { font-size: calc(11px * var(--ui-scale)); color: var(--text-3);
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Down is good here — this is debt, so a falling balance is the win. */
+.loans-trend { flex: none; font-size: calc(12px * var(--ui-scale)); font-weight: 600; }
+.loans-trend.down { color: var(--good); }
+.loans-trend.up { color: var(--warn); }
+
+.loans-section { flex: none; display: flex; flex-direction: column;
+                 gap: calc(5px * var(--ui-scale)); }
+.loans-label { font-size: calc(11px * var(--ui-scale)); color: var(--text-3); }
+
+/* One bar, split by where the money actually went. */
+.loans-split { display: flex; height: calc(10px * var(--ui-scale));
+               border-radius: 999px; overflow: hidden; background: var(--surface-3); }
+.loans-split-principal { background: var(--good); }
+.loans-split-interest { background: var(--warn); }
+.loans-legend { display: flex; gap: calc(12px * var(--ui-scale)); flex-wrap: wrap;
+                font-size: calc(11px * var(--ui-scale)); color: var(--text-3); }
+.loans-key::before { content: ''; display: inline-block; width: .6em; height: .6em;
+                     border-radius: 50%; margin-right: .45em; }
+.loans-key.principal::before { background: var(--good); }
+.loans-key.interest::before { background: var(--warn); }
+
+.loans-facts { flex: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+               gap: calc(7px * var(--ui-scale)) calc(12px * var(--ui-scale)); }
+.loans-fact { min-width: 0; }
+.loans-fact-label { font-size: calc(10px * var(--ui-scale)); color: var(--text-3);
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.loans-fact-value { font-size: calc(14px * var(--ui-scale)); font-weight: 600;
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.loans-autopay { flex: none; font-size: calc(11px * var(--ui-scale)); color: var(--text-3); }
+
+.loans-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+              overflow: hidden; }
+.loans-row { flex: 1 1 0; min-height: 0; display: flex; align-items: center;
+             gap: calc(9px * var(--ui-scale)); overflow: hidden; }
+.loans-row-main { flex: none; min-width: 0; max-width: 42%; }
+.loans-row-name { font-size: calc(13px * var(--ui-scale)); font-weight: 600;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.loans-row-note { font-size: calc(10px * var(--ui-scale)); color: var(--text-3);
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.loans-bar { flex: 1 1 auto; min-width: 0; height: calc(6px * var(--ui-scale));
+             background: var(--surface-3); border-radius: 999px; overflow: hidden; }
+.loans-bar-fill { height: 100%; background: var(--primary); border-radius: 999px; }
+.loans-row-amount { flex: none; font-size: calc(13px * var(--ui-scale));
+                    font-weight: 600; font-variant-numeric: tabular-nums;
+                    margin-left: auto; white-space: nowrap; }
+.loans-more { flex: none; font-size: calc(10px * var(--ui-scale)); color: var(--text-3); }
+
+/* ------------------------------------------------------- statement upload */
+
+.uploader { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;
+            align-items: flex-start; }
+.upload-status { font-size: 13px; color: var(--text-3); }
+/* Rejections are listed one per line and left in place — the message names the
+ * figures that disagreed, and a toast would take it away before it was read. */
+.upload-error { color: var(--danger); line-height: 1.5; margin-top: 4px; }

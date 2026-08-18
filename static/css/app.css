@@ -1286,7 +1286,12 @@ body.wall .grid { gap: 4px; }
 .debtfree-saved.muted { color: var(--text-3); }
 .debtfree-blocked { font-size: calc(10px * var(--ui-scale)); color: var(--warn); line-height: 1.45; }
 
-.debt-list .debt-row { gap: calc(8px * var(--ui-scale)); }
+.debt-list { justify-content: flex-start; gap: calc(4px * var(--ui-scale)); }
+/* Fixed row height, unlike the loans list. Three debts in a tall box should be
+ * three rows at the top, not three rows stretched a hundred pixels apart —
+ * the row count is already capped to what fits, so there is nothing to fill. */
+.debt-list .debt-row { flex: 0 0 auto; height: calc(38px * var(--ui-scale));
+                       gap: calc(8px * var(--ui-scale)); }
 .debt-row .loans-row-main { max-width: 46%; }
 .debt-when { flex: none; min-width: 0; text-align: right; margin-left: auto;
              padding-right: calc(10px * var(--ui-scale)); }

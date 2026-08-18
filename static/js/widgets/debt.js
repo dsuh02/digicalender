@@ -48,21 +48,31 @@ export function durationLabel(months) {
   return `${y}y ${m}m`;
 }
 
-/** Shared privacy toggle: these widgets are the most sensitive on the wall. */
-function privacy(ctx, redraw) {
+/**
+ * Shared privacy toggle: these widgets are the most sensitive on the wall.
+ *
+ * `fallback` is the widget's DECLARED default, and has to be passed in: a
+ * widget placed without ever opening its settings has `hideAmounts` undefined,
+ * and `undefined !== false` reads as hidden — so a widget declaring
+ * `default: false` came up masked anyway.
+ */
+function privacy(ctx, redraw, fallback = true) {
   let revealed = false;
   let timer = null;
-  const hidden = () => ctx.settings.hideAmounts !== false && !revealed;
+  const wants = () => (ctx.settings.hideAmounts === undefined
+    ? fallback : ctx.settings.hideAmounts !== false);
+  const hidden = () => wants() && !revealed;
   return {
     hidden,
     cash: (v, opts) => (hidden() ? '••••' : money(v, opts)),
     toggle: () => {
-      if (ctx.settings.hideAmounts === false) return;
+      if (!wants() && !revealed) return;      // masking is off; nothing to reveal
       revealed = !revealed;
       clearTimeout(timer);
       if (revealed) timer = setTimeout(() => { revealed = false; redraw(); }, REVEAL_MS);
       redraw();
     },
+    masking: wants,
     label: () => (revealed ? 'Hide' : 'Show'),
     stop: () => clearTimeout(timer),
   };
@@ -105,7 +115,7 @@ export const DebtPayoffWidget = {
     let stopSize = null;
     let mode = ctx.settings.mode === 'lines' ? 'lines' : 'stacked';
 
-    const priv = privacy(ctx, () => refresh());
+    const priv = privacy(ctx, () => refresh(), true);
 
     const load = async () => {
       try { data = await api.debt(); }
@@ -270,7 +280,7 @@ export const DebtFreeWidget = {
     host.append(body);
     let data = null;
     let stopSize = null;
-    const priv = privacy(ctx, () => draw());
+    const priv = privacy(ctx, () => draw(), false);
 
     const load = async () => {
       try { data = await api.debt(); } catch { data = null; }
@@ -334,9 +344,11 @@ export const DebtFreeWidget = {
       });
     };
 
+    // With masking off there is nothing to reveal, so a tap opens the plan —
+    // which is what you actually want to change when looking at these.
     host.addEventListener('click', () => {
-      if (ctx.settings.hideAmounts === false) openDebtSetup(load);
-      else priv.toggle();
+      if (priv.masking()) priv.toggle();
+      else openDebtSetup(load);
     });
 
     const off = bus.on('finance_changed', load);
@@ -366,7 +378,7 @@ export const DebtListWidget = {
     host.append(body);
     let data = null;
     let stopSize = null;
-    const priv = privacy(ctx, () => draw());
+    const priv = privacy(ctx, () => draw(), false);
 
     const load = async () => {
       try { data = await api.debt(); } catch { data = null; }
@@ -433,9 +445,11 @@ export const DebtListWidget = {
       });
     };
 
+    // With masking off there is nothing to reveal, so a tap opens the plan —
+    // which is what you actually want to change when looking at these.
     host.addEventListener('click', () => {
-      if (ctx.settings.hideAmounts === false) openDebtSetup(load);
-      else priv.toggle();
+      if (priv.masking()) priv.toggle();
+      else openDebtSetup(load);
     });
 
     const off = bus.on('finance_changed', load);

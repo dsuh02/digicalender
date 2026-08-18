@@ -71,6 +71,13 @@ class Loan:
     # running totals
     paid_interest: float = 0.0
     paid_principal: float = 0.0
+    # Interest accrued DURING the simulation, separate from `paid_interest`,
+    # which also clears whatever was already on the books when it started.
+    # Only this one belongs in "interest from here": the opening accrued
+    # interest is part of the balance being paid off, and counting it as new
+    # interest reports it twice.
+    accrued_new: float = 0.0
+    opening_interest: float = 0.0
     cleared_on: date | None = None
 
     def owed(self) -> float:
@@ -198,6 +205,8 @@ def simulate(loans: list[Loan], monthly: float, start: date, first_payment: date
     have already passed rather than pretending the clock starts at the payment.
     """
     when = start
+    for l in loans:
+        l.opening_interest = l.accrued_interest
     schedule = []
     history = [{"date": start.isoformat(),
                 "total": round(sum(l.owed() for l in loans), 2),
@@ -213,6 +222,7 @@ def simulate(loans: list[Loan], monthly: float, start: date, first_payment: date
         for l in live:
             got = accrue(l.principal, l.rates, when, pay_date)
             l.accrued_interest += got
+            l.accrued_new += got
             total_interest += got
 
         due = sum(l.owed() for l in live)

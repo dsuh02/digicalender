@@ -20,7 +20,10 @@ import { money } from './finance.js';
 
 const REVEAL_MS = 25000;
 
-const pct = (n) => `${(Number(n) || 0).toFixed(1)}%`;
+/* Two decimals, always. Federal loan rates are set to the hundredth and a
+ * borrower holds several that differ only there — rounding 3.99 and 4.50 to one
+ * decimal prints "4.0%" and "4.5%", which reads as one rate stated twice. */
+const pct = (n) => `${(Number(n) || 0).toFixed(2)}%`;
 
 /** A statement date as "Aug 2026" — the month is the unit these arrive in. */
 function monthLabel(iso) {

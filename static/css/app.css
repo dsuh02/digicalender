@@ -1265,3 +1265,33 @@ body.wall .grid { gap: 4px; }
 /* Rejections are listed one per line and left in place — the message names the
  * figures that disagreed, and a toast would take it away before it was read. */
 .upload-error { color: var(--danger); line-height: 1.5; margin-top: 4px; }
+
+/* -------------------------------------------------------------- debt --- */
+
+.debtfree { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.debtfree-holder { flex: 1 1 auto; min-height: 0; display: flex; }
+.debtfree-body { width: 100%; height: 100%; display: flex; flex-direction: column;
+                 gap: calc(6px * var(--ui-scale)); overflow: hidden; }
+.debtfree-date { font-size: calc(30px * var(--ui-scale)); font-weight: 650;
+                 line-height: 1.05; letter-spacing: -0.02em; color: var(--good);
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A date that never arrives must not be styled like an achievement. */
+.debtfree-date.never { color: var(--warn); font-size: calc(22px * var(--ui-scale)); }
+.debtfree-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+                  gap: calc(6px * var(--ui-scale)) calc(12px * var(--ui-scale));
+                  margin-top: calc(2px * var(--ui-scale)); }
+.debtfree-fact { min-width: 0; }
+.loans-fact-value.warn { color: var(--warn); }
+.debtfree-saved { font-size: calc(11px * var(--ui-scale)); color: var(--good); line-height: 1.45; }
+.debtfree-saved.muted { color: var(--text-3); }
+.debtfree-blocked { font-size: calc(10px * var(--ui-scale)); color: var(--warn); line-height: 1.45; }
+
+.debt-list .debt-row { gap: calc(8px * var(--ui-scale)); }
+.debt-row .loans-row-main { max-width: 46%; }
+.debt-when { flex: none; min-width: 0; text-align: right; margin-left: auto;
+             padding-right: calc(10px * var(--ui-scale)); }
+.debt-when-date { font-size: calc(12px * var(--ui-scale)); font-weight: 600;
+                  white-space: nowrap; }
+.debt-when-date.warn { color: var(--warn); }
+.debt-row.debt-warn .loans-row-name { color: var(--warn); }
+.debt-row .loans-row-amount { margin-left: 0; }

@@ -2,6 +2,7 @@
  * settings panel built from its schema, and can be placed on any page. */
 
 import { AlarmsWidget } from './alarms.js';
+import { DebtFreeWidget, DebtListWidget, DebtPayoffWidget } from './debt.js';
 import { AgendaWidget, DayWidget, MonthWidget, WeekWidget } from './calendar.js';
 import { AccountsWidget, BillsWidget, NetWorthWidget } from './finance.js';
 import { GalleryWidget } from './gallery.js';
@@ -20,6 +21,7 @@ export const WIDGETS = [
   TodoWidget, NotificationsWidget,
   NetWorthWidget, NetWorthChartWidget, AccountsWidget, BillsWidget,
   SpendingWidget, CashflowWidget, CreditWidget, ProjectionWidget, LoansWidget,
+  DebtPayoffWidget, DebtFreeWidget, DebtListWidget,
   DeviceGridWidget, ScenesWidget, RokuRemoteWidget, MediaWidget, AlarmsWidget,
   NowPlayingWidget, UpNextWidget, TopMusicWidget, LyricsWidget,
 ];

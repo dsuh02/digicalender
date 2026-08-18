@@ -101,6 +101,18 @@ export const api = {
   updateFinanceAccount: (id, d) => req(`/api/finance/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(d) }).then(r => r.account),
   deleteFinanceAccount: id => req(`/api/finance/accounts/${id}`, { method: 'DELETE' }),
 
+  // debt payoff
+  debt: ({ strategy, extra } = {}) => {
+    const q = new URLSearchParams();
+    if (strategy) q.set('strategy', strategy);
+    if (extra !== undefined && extra !== null) q.set('extra', extra);
+    const s = q.toString();
+    return req(`/api/finance/debt${s ? `?${s}` : ''}`);
+  },
+  saveDebtPlan: patch => req('/api/finance/debt', {
+    method: 'POST', body: JSON.stringify(patch),
+  }).then(r => r.config),
+
   // loan statements (PDF upload — the servicer has no API)
   loans: (account = '') => req(`/api/finance/loans${account ? `?account=${encodeURIComponent(account)}` : ''}`),
   loanStatement: id => req(`/api/finance/loans/${id}`),

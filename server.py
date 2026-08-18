@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 import alarms as alarm_engine
+import debt as debt_plan
 import devices as device_registry
 import feeds
 import finance
@@ -1214,6 +1215,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, projection.project(include_contributions=want))
             if method == "POST":
                 return self._json(200, {"config": projection.set_config(self._body())})
+            raise ApiError(405, "method not allowed")
+
+        if path == "/api/finance/debt":
+            if method == "GET":
+                # strategy and extra are overridable per request so the UI can
+                # show "what if" without saving it as the plan.
+                strat = (qs.get("strategy") or [""])[0] or None
+                raw = (qs.get("extra") or [""])[0]
+                try:
+                    extra = float(raw) if raw else None
+                except ValueError:
+                    raise ApiError(400, "extra must be a number")
+                return self._json(200, debt_plan.plan(strategy=strat, extra=extra))
+            if method == "POST":
+                return self._json(200, {"config": debt_plan.set_config(self._body())})
             raise ApiError(405, "method not allowed")
 
         if path == "/api/finance/kind-colors" and method == "POST":

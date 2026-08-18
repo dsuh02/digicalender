@@ -458,9 +458,11 @@ def _sync_account(st: dict) -> str | None:
         "item_id": item["id"], "external_id": number,
         "name": "Student loans", "official_name": "Aidvantage federal loans",
         "institution": INSTITUTION, "kind": "loan", "subtype": "student",
-        # Last four DIGITS, not last four characters: the account number carries
-        # a billing-group suffix, so a plain slice masks it as "36-1".
-        "mask": re.sub(r"\D", "", number)[-4:],
+        # "9163028236-1" is an account number and a BILLING GROUP. The mask has
+        # to come from the account number alone: slicing the whole string gives
+        # "36-1", and stripping the dash first glues the group digit on and
+        # gives "2361" — neither is the last four digits of anything real.
+        "mask": re.sub(r"\D", "", number.split("-")[0])[-4:],
         "balance": st["current_balance"],
         "apr": _weighted_rate(st["loans"]), "min_payment": st["current_due"],
         "next_due": st["due_date"] or None,

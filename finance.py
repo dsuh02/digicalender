@@ -112,8 +112,18 @@ def sync_item(item: dict) -> dict:
                 e["next_due"] = row.get("next_payment_due_date")
                 e["apr"] = _num(row.get("interest_rate_percentage"))
 
-    # Investment holdings give a truer figure than the raw account balance for
-    # brokerages that report cash only.
+    # Holdings are a FALLBACK, not a better answer.
+    #
+    # `/accounts/balance/get` asks the institution for the balance now, but
+    # holdings carry their own `institution_price_as_of` and Plaid refreshes
+    # those on a much slower schedule. Observed 2026-08-18: Guideline reported
+    # balance $4,501.24 against holdings priced 2026-08-03 summing to $4,066.16
+    # — a real account understated by $435 for fifteen days, by a sync that
+    # reported success every time. Fidelity was four days behind the same way.
+    #
+    # Holdings are still worth keeping for the brokerages whose account balance
+    # reports cash only, which is what this was originally for. So they are used
+    # when there is no balance to prefer, and not otherwise.
     holdings_total = {}
     for h in (inv.get("holdings") or []):
         aid = h.get("account_id")
@@ -125,8 +135,12 @@ def sync_item(item: dict) -> dict:
         ext = a.get("account_id")
         balances = a.get("balances") or {}
         kind = classify(a.get("type", ""), a.get("subtype", ""), a.get("name", ""))
-        amount = _num(balances.get("current")) or 0.0
-        if kind in ("investment", "retirement") and holdings_total.get(ext):
+        reported = _num(balances.get("current"))
+        amount = reported or 0.0
+        # Only when the institution reported nothing at all, or a flat zero it
+        # clearly does not mean, do the holdings stand in for it.
+        if (kind in ("investment", "retirement")
+                and not reported and holdings_total.get(ext)):
             amount = holdings_total[ext]
         e = extra.get(ext, {})
         fields = {

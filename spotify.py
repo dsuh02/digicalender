@@ -72,9 +72,14 @@ SCOPES = [
 # or linked to from here. A code for what is playing is the closest real thing.
 SCANNABLE = "https://scannables.scdn.co/uri/plain/svg/121619/white/640/{uri}"
 
-# Spotify's own algorithmic contexts: the DJ and the personalised mixes. They
-# are generated server-side and cannot be offset into by a third-party app.
-_ALGORITHMIC = re.compile(r"37i9dQZF1E", re.I)
+# Spotify's OWN playlists — the whole 37i9dQZF1* family: DJ and personalised
+# mixes (…1E…, …1F…) and the editorial charts (…1DX…). None of them can be
+# offset into by a third-party app. The editorial ones answer 404, which the
+# fallback below would catch; the personalised ones are worse, because they
+# ACCEPT the request and then play something else entirely. Treating the whole
+# family as non-offsettable makes the outcome the same either way: the song you
+# tapped is the song that plays.
+_ALGORITHMIC = re.compile(r"37i9dQZF1", re.I)
 
 TIMEOUT = 12.0
 

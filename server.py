@@ -1134,8 +1134,18 @@ class Handler(BaseHTTPRequestHandler):
                 elif cmd == "volume":
                     spotify_api.set_volume(_int(b, "volume", 0, 100),
                                            b.get("device_id") or None)
+                elif cmd == "play_track":
+                    out = spotify_api.play_track(str(b.get("uri") or ""),
+                                                 str(b.get("context_uri") or ""),
+                                                 b.get("device_id") or None)
+                    hub.bus.publish("spotify_changed", {})
+                    return self._json(200, {"ok": True, **out})
                 else:
                     raise ApiError(400, f"unknown command: {cmd}")
+            except spotify_api.RateLimited as e:
+                # 429 through, not flattened to 400: the UI says how long, and
+                # the client can stop asking instead of retrying into the ban.
+                raise ApiError(429, e.message)
             except spotify_api.SpotifyError as e:
                 raise ApiError(400, e.message)
             return self._json(200, {"ok": True})

@@ -17,7 +17,7 @@ import { icon } from '../core/icons.js';
 import { toast } from '../core/sheet.js';
 import { clear, el } from '../core/util.js';
 
-const REFETCH_MS = 8000;    // polite to the API
+const REFETCH_MS = 10000;   // the server caches upstream; this is just liveness
 const TICK_MS = 250;        // smooth enough for a progress bar
 const ARM_MS = 20000;       // how long scrubbing stays available after a tap
 
@@ -335,6 +335,39 @@ export function timelineWindow(nPast, nNext, capacity) {
   return { before, after };
 }
 
+/**
+ * A tap on a track plays it.
+ *
+ * Bound on pointerup with a movement guard rather than on `click`, because this
+ * widget lives on a page you SWIPE between: a drag that happens to start on a
+ * row must scroll the page, not start a song. Eight pixels is the same
+ * threshold the grid uses to tell a tap from a drag.
+ */
+function bindTap(node, track) {
+  let from = null;
+  node.addEventListener('pointerdown', (e) => { from = [e.clientX, e.clientY]; });
+  node.addEventListener('pointercancel', () => { from = null; });
+  node.addEventListener('pointerup', async (e) => {
+    if (!from) return;
+    const moved = Math.hypot(e.clientX - from[0], e.clientY - from[1]);
+    from = null;
+    if (moved > 8) return;
+    e.stopPropagation();
+    node.classList.add('starting');
+    try {
+      // The context goes with it where we know one, so playing a song from a
+      // playlist keeps playing the playlist afterwards instead of stopping.
+      await api.spotifyControl('play_track', {
+        uri: track.uri, context_uri: track.context_uri || '',
+      });
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      node.classList.remove('starting');
+    }
+  });
+}
+
 export const UpNextWidget = {
   type: 'up_next_music', name: 'Queue', icon: 'speaker', category: 'Home',
   defaultSize: { w: 12, h: 14 }, minSize: { w: 4, h: 4 },
@@ -362,7 +395,14 @@ export const UpNextWidget = {
 
       if (data.error) { body.append(el('div.empty-hint', { text: data.error })); return; }
       if (!data.current && !data.past.length && !data.next.length) {
-        body.append(el('div.empty-hint', { text: 'Nothing playing or queued' }));
+        // An empty history and an unreadable one are different facts. Saying
+        // "nothing played" when Spotify refused the request is how a rate
+        // limit spent a day looking like a listening habit.
+        body.append(el('div.empty-hint', {
+          text: data.history_error
+            ? `Recently played unavailable — ${data.history_error}`
+            : 'Nothing playing or queued',
+        }));
         return;
       }
 
@@ -390,21 +430,23 @@ export const UpNextWidget = {
 
         const list = el(`div.tl-list${horizontal ? '.horizontal' : ''}`);
         items.forEach(({ t, when }) => {
-          list.append(el(`div.tl-item.${when}`, {}, [
+          const row = el(`div.tl-item.${when}${t.uri ? '.tappable' : ''}`, {}, [
             ctx.settings.showArt !== false && t.art
               ? el('img.tl-art', { src: t.art, alt: '' }) : null,
             el('div.tl-main', {}, [
               el('div.tl-title', { text: t.name }),
               el('div.tl-artist', { text: (t.artists || []).join(', ') }),
             ]),
-          ]));
+          ]);
+          if (t.uri) bindTap(row, t);
+          list.append(row);
         });
         return list;
       });
     };
 
     load();
-    poll = setInterval(load, 15000);
+    poll = setInterval(load, 30000);
     const off = bus.on('spotify_changed', load);
     return { refresh: load,
              destroy: () => { off(); clearInterval(poll); if (stopSize) stopSize(); } };

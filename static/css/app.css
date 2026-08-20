@@ -1300,3 +1300,10 @@ body.wall .grid { gap: 4px; }
 .debt-when-date.warn { color: var(--warn); }
 .debt-row.debt-warn .loans-row-name { color: var(--warn); }
 .debt-row .loans-row-amount { margin-left: 0; }
+
+/* A track you can tap to play. Feedback is deliberately subtle — this sits on a
+ * page you swipe between, so it must not look like a button begging to be hit. */
+.tl-item.tappable { cursor: pointer; border-radius: var(--r-ctl);
+                    transition: background .15s ease; }
+.tl-item.tappable:active { background: var(--surface-3); }
+.tl-item.starting { opacity: .5; }

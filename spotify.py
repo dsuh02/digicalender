@@ -83,6 +83,105 @@ class SpotifyError(Exception):
         self.code = code
 
 
+class RateLimited(SpotifyError):
+    """Spotify has told us to stop. `until` is a unix timestamp."""
+
+    def __init__(self, until: float, message: str = ""):
+        wait = max(0, int(until - time.time()))
+        hrs, mins = wait // 3600, (wait % 3600) // 60
+        when = f"{hrs}h {mins}m" if hrs else f"{mins}m"
+        super().__init__(message or f"Spotify rate limit — retry in {when}", 429,
+                         "QUOTA_EXCEEDED")
+        self.until = until
+        self.wait = wait
+
+
+# ------------------------------------------------------------- rate limiting
+#
+# A 429 from Spotify is not a transient blip to retry through. Observed live on
+# 2026-08-20: `Retry-After: 39650` — ELEVEN HOURS, with reason QUOTA_EXCEEDED.
+# Calling during that window is what earns a window that long in the first
+# place, and this app had four widgets polling straight through it.
+#
+# So the ban is held here, in the process, and no request is made while it
+# stands. Every read also goes through a TTL cache, because the widgets are the
+# real problem: several of them, on every open page, in every browser pointed at
+# the panel, each asking for the same thing on its own timer. One kiosk and one
+# laptop double the upstream traffic for identical data.
+
+_BLOCKED_UNTIL = 0.0
+_CACHE: dict[tuple, tuple[float, object]] = {}
+
+# How long each read stays fresh. Chosen from how fast the underlying thing
+# actually changes, not from how often a widget feels like asking.
+TTL = {
+    "/me/player": 6.0,                  # the client interpolates progress itself
+    "/me/player/queue": 12.0,
+    "/me/player/recently-played": 120.0,
+    "/me/player/devices": 30.0,
+    "/me/top/": 6 * 3600.0,             # your top tracks do not move in an hour
+    "/me/playlists": 1800.0,
+}
+DEFAULT_TTL = 30.0
+
+
+def _ttl_for(path: str) -> float:
+    for prefix, ttl in TTL.items():
+        if path.startswith(prefix):
+            return ttl
+    return DEFAULT_TTL
+
+
+def rate_limited_until() -> float:
+    return _BLOCKED_UNTIL
+
+
+def _note_rate_limit(retry_after: str | None) -> float:
+    global _BLOCKED_UNTIL
+    try:
+        wait = int(retry_after or 0)
+    except ValueError:
+        wait = 0
+    # A 429 with no Retry-After still means stop; a minute is the polite floor.
+    _BLOCKED_UNTIL = max(_BLOCKED_UNTIL, time.time() + max(wait, 60))
+    return _BLOCKED_UNTIL
+
+
+def cached_get(path: str, params: dict | None = None, ttl: float | None = None):
+    """A GET that shares one upstream call between every caller and client.
+
+    On a rate limit this returns the last value it saw, however old, rather than
+    failing. A widget showing music from four minutes ago is right about almost
+    everything; a widget showing "Too many requests" for eleven hours is useful
+    to nobody. The staleness is reported separately so the UI can say so.
+    """
+    key = (path, tuple(sorted((params or {}).items())))
+    ttl = _ttl_for(path) if ttl is None else ttl
+    now = time.time()
+    hit = _CACHE.get(key)
+    if hit and now < hit[0]:
+        return hit[1], False
+    try:
+        value = call("GET", path, None, params)
+    except RateLimited:
+        if hit:
+            return hit[1], True         # stale, but real
+        raise
+    except SpotifyError:
+        # A transient failure should not throw away a good answer either.
+        if hit and now - (hit[0] - ttl) < 600:
+            return hit[1], True
+        raise
+    _CACHE[key] = (now + ttl, value)
+    return value, False
+
+
+def forget_cached(prefix: str = "") -> None:
+    """Drop cached reads — after a command that changes what they would say."""
+    for key in [k for k in _CACHE if not prefix or k[0].startswith(prefix)]:
+        _CACHE.pop(key, None)
+
+
 def configured() -> bool:
     return bool((store.get_setting("spotify_client_id") or "").strip()
                 and (store.get_setting("spotify_client_secret") or "").strip())
@@ -254,6 +353,10 @@ def disconnect() -> None:
 # --------------------------------------------------------------------- api
 
 def call(method: str, path: str, body: dict | None = None, params: dict | None = None):
+    # Refuse before the socket, not after. Every call made inside a ban is a
+    # call that can extend it, and the answer is known in advance anyway.
+    if time.time() < _BLOCKED_UNTIL:
+        raise RateLimited(_BLOCKED_UNTIL)
     url = API + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -281,6 +384,9 @@ def call(method: str, path: str, body: dict | None = None, params: dict | None =
                 # recorded itself as broken.
                 return {}
     except urllib.error.HTTPError as e:
+        if e.code == 429:
+            until = _note_rate_limit(e.headers.get("Retry-After"))
+            raise RateLimited(until)
         detail, code = "", ""
         try:
             d = json.loads(e.read().decode() or "{}")
@@ -374,6 +480,7 @@ def start(device_id: str | None, uri: str = "", shuffle: bool = False) -> None:
         else:
             body["context_uri"] = u
     call("PUT", "/me/player/play", body, params)
+    forget_cached("/me/player")
 
 
 def set_volume(percent: int, device_id: str | None = None) -> None:
@@ -531,6 +638,41 @@ def seek(position_ms: int, device_id: str | None = None) -> None:
     if device_id:
         params["device_id"] = device_id
     call("PUT", "/me/player/seek", None, params)
+    forget_cached("/me/player")
+
+
+def play_track(uri: str, context_uri: str = "", device_id: str | None = None) -> dict:
+    """Play one specific track — what a tap on the timeline means.
+
+    When the track came from a playlist or album, that context is passed with
+    the track as an OFFSET, so the rest keeps playing after it. Sending the
+    track alone would play it and then stop, which is not what tapping a song in
+    a list means anywhere else.
+
+    A context that Spotify will not accept from a third-party app — the DJ and
+    the other algorithmic ones — falls back to playing the track on its own.
+    That does end the DJ, and there is no way around it: the DJ has no API.
+    """
+    u = (uri or "").strip()
+    if ":track:" not in u:
+        raise SpotifyError("That is not a track", 400)
+    params = {"device_id": device_id} if device_id else None
+    ctx = (context_uri or "").strip()
+
+    if ctx and ":track:" not in ctx:
+        try:
+            call("PUT", "/me/player/play",
+                 {"context_uri": ctx, "offset": {"uri": u}}, params)
+            forget_cached("/me/player")
+            return {"played": u, "context": ctx}
+        except SpotifyError as e:
+            if e.status not in (403, 404):
+                raise
+            # Fall through: the context is one Spotify will not hand over.
+
+    call("PUT", "/me/player/play", {"uris": [u]}, params)
+    forget_cached("/me/player")
+    return {"played": u, "context": ""}
 
 
 def now_playing() -> dict:
@@ -540,10 +682,16 @@ def now_playing() -> dict:
     idle player is a normal state, not an error, and a widget should not have to
     tell those apart.
     """
-    r = call("GET", "/me/player") or {}
+    # An idle player is polled far less than a playing one. Overnight this is
+    # the difference between a few hundred wasted calls and a few dozen, and
+    # the quota is a daily budget.
+    last = _CACHE.get(("/me/player", ()))
+    idle = bool(last and not ((last[1] or {}).get("is_playing")))
+    r, stale = cached_get("/me/player", None, 45.0 if idle else 10.0)
+    r = r or {}
     item = r.get("item") or {}
     if not item:
-        return {"playing": False, "track": None, "device": None}
+        return {"playing": False, "track": None, "device": None, "stale": stale}
     album = item.get("album") or {}
     images = album.get("images") or []
     ctx = r.get("context") or {}
@@ -598,32 +746,47 @@ def timeline(history: int = 20) -> dict:
     rendering top-to-bottom or left-to-right can then just walk it.
     """
     past: list[dict] = []
+    stale = False
+    # An empty history and an UNREADABLE history are different facts, and
+    # collapsing them is how a rate limit spent a day looking like "you have not
+    # listened to anything". Whatever went wrong is reported, by name.
+    history_error = ""
     try:
-        rec = call("GET", "/me/player/recently-played", None, {"limit": min(50, history)})
-        for item in (rec.get("items") or []):
+        rec, s1 = cached_get("/me/player/recently-played", {"limit": min(50, history)})
+        stale = stale or s1
+        for item in ((rec or {}).get("items") or []):
             t = (item or {}).get("track")
-            if t:
-                past.append(_track_view(t))
+            if not t:
+                continue
+            view = _track_view(t)
+            view["played_at"] = item.get("played_at") or ""
+            ctx = item.get("context") or {}
+            view["context_uri"] = ctx.get("uri") or ""
+            past.append(view)
         past.reverse()
-    except SpotifyError:
-        past = []                       # no history scope, or nothing recorded
+    except SpotifyError as e:
+        history_error = e.message
 
     current, upcoming = None, []
+    queue_error = ""
     try:
-        q = call("GET", "/me/player/queue") or {}
+        q, s2 = cached_get("/me/player/queue")
+        q = q or {}
+        stale = stale or s2
         cur = q.get("currently_playing")
         if cur:
             current = _track_view(cur)
         upcoming = [_track_view(t) for t in (q.get("queue") or [])[:20] if t]
-    except SpotifyError:
-        pass
+    except SpotifyError as e:
+        queue_error = e.message
 
     # The queue endpoint repeats the current track at the head of history for
     # some clients; drop an immediate duplicate so it is not shown twice.
     if current and past and past[-1].get("uri") == current.get("uri"):
         past.pop()
 
-    return {"past": past, "current": current, "next": upcoming}
+    return {"past": past, "current": current, "next": upcoming, "stale": stale,
+            "history_error": history_error, "queue_error": queue_error}
 
 
 def queue() -> list[dict]:
@@ -654,7 +817,9 @@ def top(kind: str = "artists", time_range: str = "medium_term", limit: int = 20)
     """Top artists or tracks. Needs user-top-read, which an older token lacks."""
     kind = "tracks" if kind == "tracks" else "artists"
     tr = time_range if time_range in TIME_RANGES else "medium_term"
-    r = call("GET", f"/me/top/{kind}", None, {"time_range": tr, "limit": min(50, limit)})
+    # Cached for hours: this is the widget that broke first under the rate
+    # limit, and it is also the one whose answer changes least.
+    r, stale = cached_get(f"/me/top/{kind}", {"time_range": tr, "limit": min(50, limit)})
     items = []
     for it in r.get("items") or []:
         if not it:
@@ -676,7 +841,8 @@ def top(kind: str = "artists", time_range: str = "medium_term", limit: int = 20)
                 "art": (imgs[-1] or {}).get("url", "") if imgs else "",
                 "album": album.get("name") or "",
             })
-    return {"kind": kind, "time_range": tr, "label": TIME_RANGES[tr], "items": items}
+    return {"kind": kind, "time_range": tr, "label": TIME_RANGES[tr],
+            "items": items, "stale": stale}
 
 
 def pause() -> None:

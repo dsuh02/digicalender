@@ -83,7 +83,16 @@ export const NowPlayingWidget = {
         await api.spotifyControl(command, extra);
         // Spotify needs a moment before the player reflects the change.
         setTimeout(load, 350);
-      } catch (e) { toast(e.message, true); }
+        return true;
+      } catch (e) {
+        toast(e.message, true);
+        // Re-read on ANY refused command. The UI has already moved
+        // optimistically — the scrub bar in particular — and a refusal means
+        // that optimism was wrong. The DJ answers 403 "Restriction violated"
+        // to a seek, so this is a real path, not a theoretical one.
+        load();
+        return false;
+      }
     };
 
     let bar = null;
@@ -199,6 +208,9 @@ export const NowPlayingWidget = {
         // second before Spotify reports the new position.
         data.progress_ms = ms;
         fetchedAt = performance.now();
+        // Some contexts refuse seeking outright — the DJ answers 403
+        // "Restriction violated". Re-read on failure so the bar snaps back to
+        // where the player really is instead of sitting on a lie for a poll.
         send('seek', { position_ms: ms });
         setArmed(true);                   // a scrub restarts the disarm clock
       };

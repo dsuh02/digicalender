@@ -72,6 +72,10 @@ SCOPES = [
 # or linked to from here. A code for what is playing is the closest real thing.
 SCANNABLE = "https://scannables.scdn.co/uri/plain/svg/121619/white/640/{uri}"
 
+# Spotify's own algorithmic contexts: the DJ and the personalised mixes. They
+# are generated server-side and cannot be offset into by a third-party app.
+_ALGORITHMIC = re.compile(r"37i9dQZF1E", re.I)
+
 TIMEOUT = 12.0
 
 
@@ -682,6 +686,15 @@ def play_track(uri: str, context_uri: str = "", device_id: str | None = None) ->
         raise SpotifyError("That is not a track", 400)
     params = {"device_id": device_id} if device_id else None
     ctx = (context_uri or "").strip()
+
+    # An algorithmic context (37i9dQZF1E* — the DJ, Daily Mix, Discover Weekly)
+    # is generated on Spotify's side and has no stable track list to offset
+    # into. Passing one ACCEPTS the request and then plays whatever it wants,
+    # so a tap on a specific song would start a different one. Dropping the
+    # context plays the song that was actually tapped, which is the whole point
+    # of the gesture; it does end the DJ, and there is no API that would not.
+    if _ALGORITHMIC.search(ctx):
+        ctx = ""
 
     if ctx and ":track:" not in ctx:
         try:

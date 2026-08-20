@@ -1134,6 +1134,11 @@ class Handler(BaseHTTPRequestHandler):
                 elif cmd == "volume":
                     spotify_api.set_volume(_int(b, "volume", 0, 100),
                                            b.get("device_id") or None)
+                elif cmd == "skip_to":
+                    out = spotify_api.advance(_int(b, "steps", 1, 20),
+                                              b.get("device_id") or None)
+                    hub.bus.publish("spotify_changed", {})
+                    return self._json(200, {"ok": True, **out})
                 elif cmd == "play_track":
                     out = spotify_api.play_track(str(b.get("uri") or ""),
                                                  str(b.get("context_uri") or ""),

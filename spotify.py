@@ -669,6 +669,29 @@ def seek(position_ms: int, device_id: str | None = None) -> None:
     forget_cached("/me/player")
 
 
+def advance(steps: int = 1, device_id: str | None = None) -> dict:
+    """Skip forward N tracks — how you reach something already IN the queue.
+
+    There is no "jump to queue position" endpoint, and starting the track by URI
+    is not a substitute: it replaces what the player is doing, so the queue and
+    the context behind it are gone. Stepping forward is the only way to land on
+    a queued track with everything after it still lined up, and it is what the
+    Spotify app itself does.
+
+    The pause between skips is not superstition. `next` is processed
+    asynchronously, and firing several with no gap loses some of them — the
+    player ends up somewhere short of where you asked for.
+    """
+    steps = max(1, min(20, int(steps)))
+    params = {"device_id": device_id} if device_id else None
+    for i in range(steps):
+        call("POST", "/me/player/next", None, params)
+        if i + 1 < steps:
+            time.sleep(0.25)
+    forget_cached("/me/player")
+    return {"skipped": steps}
+
+
 def play_track(uri: str, context_uri: str = "", device_id: str | None = None) -> dict:
     """Play one specific track — what a tap on the timeline means.
 
@@ -822,7 +845,19 @@ def timeline(history: int = 20) -> dict:
     if current and past and past[-1].get("uri") == current.get("uri"):
         past.pop()
 
+    # What is playing RIGHT NOW is playing from something — a playlist, an
+    # album, an artist. A history entry that never recorded its own context can
+    # still borrow this one, which is usually the same thing anyway. Read from
+    # the cache, so it costs nothing.
+    context_uri = ""
+    try:
+        pl, _ = cached_get("/me/player")
+        context_uri = ((pl or {}).get("context") or {}).get("uri") or ""
+    except SpotifyError:
+        pass
+
     return {"past": past, "current": current, "next": upcoming, "stale": stale,
+            "context_uri": context_uri,
             "history_error": history_error, "queue_error": queue_error}
 
 

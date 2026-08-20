@@ -355,7 +355,7 @@ export function timelineWindow(nPast, nNext, capacity) {
  * row must scroll the page, not start a song. Eight pixels is the same
  * threshold the grid uses to tell a tap from a drag.
  */
-function bindTap(node, track) {
+function bindTap(node, act, liveContext) {
   let from = null;
   node.addEventListener('pointerdown', (e) => { from = [e.clientX, e.clientY]; });
   node.addEventListener('pointercancel', () => { from = null; });
@@ -367,11 +367,17 @@ function bindTap(node, track) {
     e.stopPropagation();
     node.classList.add('starting');
     try {
-      // The context goes with it where we know one, so playing a song from a
-      // playlist keeps playing the playlist afterwards instead of stopping.
-      await api.spotifyControl('play_track', {
-        uri: track.uri, context_uri: track.context_uri || '',
-      });
+      if (act.kind === 'skip') {
+        await api.spotifyControl('skip_to', { steps: act.steps });
+      } else {
+        // The context goes with it where we know one, so playing a song from a
+        // playlist keeps playing the playlist afterwards instead of stopping.
+        // A history entry that recorded no context borrows the live one.
+        await api.spotifyControl('play_track', {
+          uri: act.track.uri,
+          context_uri: act.track.context_uri || liveContext || '',
+        });
+      }
     } catch (err) {
       toast(err.message, true);
     } finally {
@@ -434,15 +440,24 @@ export const UpNextWidget = {
         const { before, after } = timelineWindow(
           past.length, data.next.length, data.current ? capacity : capacity + 1);
 
+        // A tap means something different in each third of the strip, so the
+        // action is decided here, where the position is known, rather than
+        // guessed later from the track alone.
         const items = [
-          ...past.slice(past.length - before).map(t => ({ t, when: 'past' })),
-          ...(data.current ? [{ t: data.current, when: 'now' }] : []),
-          ...data.next.slice(0, after).map(t => ({ t, when: 'next' })),
+          ...past.slice(past.length - before)
+            .map(t => ({ t, when: 'past', act: { kind: 'play', track: t } })),
+          ...(data.current ? [{ t: data.current, when: 'now', act: null }] : []),
+          ...data.next.slice(0, after).map((t, i) => ({
+            // Already in the queue: step forward to it. Starting it by URI
+            // would replace the queue with that one track, which is exactly
+            // the complaint this fixes.
+            t, when: 'next', act: { kind: 'skip', steps: i + 1 },
+          })),
         ];
 
         const list = el(`div.tl-list${horizontal ? '.horizontal' : ''}`);
-        items.forEach(({ t, when }) => {
-          const row = el(`div.tl-item.${when}${t.uri ? '.tappable' : ''}`, {}, [
+        items.forEach(({ t, when, act }) => {
+          const row = el(`div.tl-item.${when}${act ? '.tappable' : ''}`, {}, [
             ctx.settings.showArt !== false && t.art
               ? el('img.tl-art', { src: t.art, alt: '' }) : null,
             el('div.tl-main', {}, [
@@ -450,7 +465,7 @@ export const UpNextWidget = {
               el('div.tl-artist', { text: (t.artists || []).join(', ') }),
             ]),
           ]);
-          if (t.uri) bindTap(row, t);
+          if (act) bindTap(row, act, data.context_uri);
           list.append(row);
         });
         return list;

@@ -108,8 +108,19 @@ class RateLimited(SpotifyError):
 # real problem: several of them, on every open page, in every browser pointed at
 # the panel, each asking for the same thing on its own timer. One kiosk and one
 # laptop double the upstream traffic for identical data.
+#
+# ⚠️ THE LIMIT IS PER ENDPOINT, not per app. Measured during the same ban:
+#
+#     200  /me/player            429  /me/player/recently-played
+#     200  /me/player/queue      429  /me/top/tracks
+#     200  /me/playlists         429  /me
+#
+# which is exactly why the panel kept showing the current song while the
+# history and Top Music went blank. A single global flag would have taken the
+# working endpoints down with the banned ones for eleven hours — so the ban is
+# held per path.
 
-_BLOCKED_UNTIL = 0.0
+_BLOCKED: dict[str, float] = {}
 _CACHE: dict[tuple, tuple[float, object]] = {}
 
 # How long each read stays fresh. Chosen from how fast the underlying thing
@@ -132,19 +143,30 @@ def _ttl_for(path: str) -> float:
     return DEFAULT_TTL
 
 
-def rate_limited_until() -> float:
-    return _BLOCKED_UNTIL
+def blocked_until(path: str) -> float:
+    """When this endpoint may be called again; 0 when it is free."""
+    until = _BLOCKED.get(path, 0.0)
+    if until and until <= time.time():
+        _BLOCKED.pop(path, None)
+        return 0.0
+    return until
 
 
-def _note_rate_limit(retry_after: str | None) -> float:
-    global _BLOCKED_UNTIL
+def rate_limited() -> dict:
+    """Every endpoint currently banned, for diagnostics."""
+    now = time.time()
+    return {p: round(u - now) for p, u in _BLOCKED.items() if u > now}
+
+
+def _note_rate_limit(path: str, retry_after: str | None) -> float:
     try:
         wait = int(retry_after or 0)
     except ValueError:
         wait = 0
     # A 429 with no Retry-After still means stop; a minute is the polite floor.
-    _BLOCKED_UNTIL = max(_BLOCKED_UNTIL, time.time() + max(wait, 60))
-    return _BLOCKED_UNTIL
+    until = max(_BLOCKED.get(path, 0.0), time.time() + max(wait, 60))
+    _BLOCKED[path] = until
+    return until
 
 
 def cached_get(path: str, params: dict | None = None, ttl: float | None = None):
@@ -354,9 +376,11 @@ def disconnect() -> None:
 
 def call(method: str, path: str, body: dict | None = None, params: dict | None = None):
     # Refuse before the socket, not after. Every call made inside a ban is a
-    # call that can extend it, and the answer is known in advance anyway.
-    if time.time() < _BLOCKED_UNTIL:
-        raise RateLimited(_BLOCKED_UNTIL)
+    # call that can extend it, and the answer is known in advance anyway. Held
+    # per path, because only some endpoints are ever banned at once.
+    until = blocked_until(path)
+    if until:
+        raise RateLimited(until)
     url = API + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -385,7 +409,7 @@ def call(method: str, path: str, body: dict | None = None, params: dict | None =
                 return {}
     except urllib.error.HTTPError as e:
         if e.code == 429:
-            until = _note_rate_limit(e.headers.get("Retry-After"))
+            until = _note_rate_limit(path, e.headers.get("Retry-After"))
             raise RateLimited(until)
         detail, code = "", ""
         try:
